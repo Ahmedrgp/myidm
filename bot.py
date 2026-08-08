@@ -14,6 +14,7 @@ import sys
 import time
 import math
 import re
+import gc
 import logging
 import tempfile
 import sqlite3
@@ -365,7 +366,7 @@ async def start_web_server():
     logger.info(f"🌐 خادم الويب الشغّال (OMNIPOTENT ENGINE) يعمل على المنفذ: {PORT}")
 
 # ==========================================
-# 5. إعداد عميل Pyrogram الفائق (16 Workers)
+# 5. إعداد عميل Pyrogram الفائق (4 Workers لإبقاء الـ RAM أقل من 512MB)
 # ==========================================
 bot = Client(
     "downloader_bot",
@@ -373,11 +374,11 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     workdir=".",
-    workers=16
+    workers=4
 )
 
 # ==========================================
-# 6. مستخرج ومفكك الروابط المطلق وتخطي صفحات الويب (Web Page & HTML Unrestrict Resolver)
+# 6. مستخرج ومفكك الروابط المطلق خفيف الذاكرة (Memory-Safe Streamed Unrestrict Resolver)
 # ==========================================
 async def unrestrict_direct_link(url: str) -> str:
     # Mediafire
@@ -385,19 +386,17 @@ async def unrestrict_direct_link(url: str) -> str:
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
-                    resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True)
+                    resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True, stream=True)
                     if resp.status_code == 200:
-                        match = re.search(r'href="(https?://download\d+\.mediafire\.com/[^"]+)"', resp.text)
+                        content_bytes = bytearray()
+                        async for chunk in resp.aiter_content(32 * 1024):
+                            content_bytes.extend(chunk)
+                            if len(content_bytes) >= 128 * 1024:
+                                break
+                        html_sample = content_bytes.decode("utf-8", errors="ignore")
+                        match = re.search(r'href="(https?://download\d+\.mediafire\.com/[^"]+)"', html_sample)
                         if match:
                             return match.group(1)
-            else:
-                async with aiohttp.ClientSession(auto_decompress=False) as session:
-                    async with session.get(url, headers=STEALTH_HEADERS) as resp:
-                        if resp.status == 200:
-                            html = await resp.text()
-                            match = re.search(r'href="(https?://download\d+\.mediafire\.com/[^"]+)"', html)
-                            if match:
-                                return match.group(1)
         except Exception:
             pass
 
@@ -411,18 +410,23 @@ async def unrestrict_direct_link(url: str) -> str:
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
-                    resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True)
+                    resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True, stream=True)
                     if resp.status_code == 200:
-                        # البحث عن رابط التنزيل المباشر للملف الأصلي
-                        direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar)[^"\']*)["\']', resp.text, re.IGNORECASE)
-                        if direct_file_matches:
-                            return direct_file_matches[0]
-                        
-                        # البحث عن روابط أزرار التنزيل أو السيرفرات التابعة لـ AN1
-                        an1_download_links = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', resp.text, re.IGNORECASE)
-                        for dlink in an1_download_links:
-                            if "an1" in dlink or "file" in dlink or "download" in dlink:
-                                return dlink
+                        ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
+                        if "text/html" in ctype:
+                            content_bytes = bytearray()
+                            async for chunk in resp.aiter_content(32 * 1024):
+                                content_bytes.extend(chunk)
+                                if len(content_bytes) >= 128 * 1024:
+                                    break
+                            html_sample = content_bytes.decode("utf-8", errors="ignore")
+                            direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar)[^"\']*)["\']', html_sample, re.IGNORECASE)
+                            if direct_file_matches:
+                                return direct_file_matches[0]
+                            an1_download_links = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', html_sample, re.IGNORECASE)
+                            for dlink in an1_download_links:
+                                if "an1" in dlink or "file" in dlink or "download" in dlink:
+                                    return dlink
         except Exception:
             pass
 
@@ -447,14 +451,20 @@ async def unrestrict_direct_link(url: str) -> str:
     if "catbox.moe" in url:
         return url
 
-    # فاحص عام لصفحات الويب (في حال قام المستخدم بإرسال رابط صفحة بدلاً من الرابط المباشر)
+    # فاحص عام لصفحات الويب بتقنية البث لتقليل الـ RAM
     try:
         if CURL_CFFI_AVAILABLE:
             async with CurlAsyncSession(impersonate="chrome124") as session:
-                resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True)
+                resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True, stream=True)
                 ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
-                if "text/html" in ctype and len(resp.text) < 1500 * 1024:
-                    direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', resp.text, re.IGNORECASE)
+                if "text/html" in ctype:
+                    content_bytes = bytearray()
+                    async for chunk in resp.aiter_content(32 * 1024):
+                        content_bytes.extend(chunk)
+                        if len(content_bytes) >= 128 * 1024:
+                            break
+                    html_sample = content_bytes.decode("utf-8", errors="ignore")
+                    direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
                     if direct_matches:
                         return direct_matches[0]
     except Exception:
@@ -654,7 +664,7 @@ async def probe_command_handler(client: Client, message: Message):
 
         if CURL_CFFI_AVAILABLE:
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
-            async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True) as session:
+            async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True, stream=True) as session:
                 resp = await session.get(direct_url, headers=headers)
                 status = resp.status_code
                 clen = resp.headers.get("Content-Length", "N/A")
@@ -959,6 +969,7 @@ async def queue_worker():
             logger.exception(f"خطأ أثناء معالجة المهمة: {e}")
         finally:
             request_queue.task_done()
+            gc.collect()
 
 # ==========================================
 # 12. معالجة وتنزيل ملفات التورينت (Torrent & Magnet Downloader Engine)
@@ -1018,6 +1029,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
         await status_msg.edit_text(f"❌ <b>Torrent Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         ACTIVE_TASKS.pop(task_id, None)
+        gc.collect()
 
 async def process_single_local_file_upload(file_path: str, filename: str, actual_file_size: int, status_msg: Message, user_msg: Message, user_id: int, start_time: float, task_id: str):
     settings = db_get_user_settings(user_id)
@@ -1104,12 +1116,12 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                 
                 if CURL_CFFI_AVAILABLE:
                     headers = {**STEALTH_HEADERS, "Referer": referer_header}
-                    async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True) as session:
-                        resp = await session.get(direct_url, headers=headers, stream=True)
+                    async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True, stream=True) as session:
+                        resp = await session.get(direct_url, headers=headers)
                         fname = cname or smart_extract_filename(direct_url, resp.headers)
                         temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
                         with open(temp_fpath, "wb") as f:
-                            async for chunk in resp.aiter_content(2048 * 1024):
+                            async for chunk in resp.aiter_content(1024 * 1024):
                                 if chunk: f.write(chunk)
                         zip_file.write(temp_fpath, arcname=fname)
                         downloaded_files.append(temp_fpath)
@@ -1122,7 +1134,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                                 fname = cname or smart_extract_filename(direct_url, resp.headers)
                                 temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
                                 with open(temp_fpath, "wb") as f:
-                                    async for chunk in resp.content.iter_chunked(2048 * 1024):
+                                    async for chunk in resp.content.iter_chunked(1024 * 1024):
                                         if chunk: f.write(chunk)
                                 zip_file.write(temp_fpath, arcname=fname)
                                 downloaded_files.append(temp_fpath)
@@ -1146,6 +1158,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
         if os.path.exists(zip_filepath):
             try: os.remove(zip_filepath)
             except Exception: pass
+        gc.collect()
 
 async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message):
     file_path = None
@@ -1193,19 +1206,23 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             if resp.status_code not in (200, 206, 301, 302, 307, 308):
                                 break
 
-                            # فحص ما إذا كانت الاستجابة صفحة HTML أصغر من 300 كيلوبايت وليست ملفاً حقيقياً
                             ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
                             content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
                             total_size = int(content_length) if content_length and content_length.isdigit() else 0
 
+                            # فحص ما إذا كانت الاستجابة صفحة HTML من عينة البث دون شحن الـ RAM
                             if "text/html" in ctype and total_size < 300 * 1024 and not download_success:
-                                html_text = resp.text
-                                direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_text, re.IGNORECASE)
+                                content_bytes = bytearray()
+                                async for chunk in resp.aiter_content(32 * 1024):
+                                    content_bytes.extend(chunk)
+                                    if len(content_bytes) >= 128 * 1024:
+                                        break
+                                html_sample = content_bytes.decode("utf-8", errors="ignore")
+                                direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
                                 if direct_file_matches:
                                     direct_url = direct_file_matches[0]
                                     parsed_url = urllib.parse.urlparse(direct_url)
                                     referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-                                    # إعادة المحاولة بالرابط المباشر للملف الأصلي
                                     resp = await session.get(direct_url, headers={**STEALTH_HEADERS, "Referer": referer_header}, stream=True)
                                     content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
                                     total_size = int(content_length) if content_length and content_length.isdigit() else 0
@@ -1245,7 +1262,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 if status_tracker["downloaded"] > 0:
                                     f.seek(status_tracker["downloaded"])
                                 
-                                async for chunk in resp.aiter_content(1024 * 1024):
+                                async for chunk in resp.aiter_content(512 * 1024):
                                     if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                                         await status_msg.edit_text("🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                         return
@@ -1297,7 +1314,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
                     with open(file_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(2048 * 1024):
+                        async for chunk in response.content.iter_chunked(512 * 1024):
                             if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                                 await status_msg.edit_text("🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                 return
@@ -1319,17 +1336,15 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
         
-        # فحص إضافي: إذا كان الملف المحمل صفحة HTML صغيرة وتم تنزيلها بالخطأ لكولنها زر تنزيل
+        # فحص إضافي محمي الذاكرة للـ HTML
         if actual_file_size < 150 * 1024 and file_path and os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f_check:
-                head_sample = f_check.read(1024).lower()
+                head_sample = f_check.read(4096).lower()
                 if "<!doctype html" in head_sample or "<html" in head_sample:
-                    # هذه صفحة ويب وليست الملف الأصلي، استخرج رابط الملف الحقيقي
                     direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', head_sample, re.IGNORECASE)
                     if direct_matches:
                         real_url = direct_matches[0]
                         os.remove(file_path)
-                        # إعادة التنزيل بالرابط المباشر
                         await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg)
                         return
 
@@ -1423,6 +1438,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 os.remove(file_path)
             except Exception:
                 pass
+        gc.collect()
 
 # ==========================================
 # 13. نقطة البداية وتشغيل البوت (Main Entry Point)
