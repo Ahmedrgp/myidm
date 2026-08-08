@@ -57,9 +57,8 @@ DB_FILE = "bot_database.db"
 
 STEALTH_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-    "Accept-Encoding": "gzip, deflate",
     "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
@@ -211,7 +210,7 @@ TEXTS = {
 }
 
 # ==========================================
-# 3. إدارة وتحديث قاعدة البيانات الدائمة المزدوجة
+# 3. إدارة وتحديث قاعدة البيانات الدائمة
 # ==========================================
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -663,7 +662,7 @@ async def probe_command_handler(client: Client, message: Message):
     
     timeout = aiohttp.ClientTimeout(total=15, sock_connect=10)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
             direct_url = await unrestrict_direct_link(session, raw_url)
             async with session.head(direct_url, headers=STEALTH_HEADERS, allow_redirects=True) as resp:
                 status = resp.status
@@ -1096,7 +1095,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
     
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
             with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                 for idx, (raw_url, cname, _) in enumerate(valid_requests, 1):
                     await status_msg.edit_text(f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
@@ -1145,7 +1144,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
     
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
             direct_url = await unrestrict_direct_link(session, raw_url)
             
             async with session.get(direct_url, headers=STEALTH_HEADERS, allow_redirects=True) as response:
