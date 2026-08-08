@@ -365,7 +365,7 @@ async def start_web_server():
     logger.info(f"🌐 خادم الويب الشغّال (OMNIPOTENT ENGINE) يعمل على المنفذ: {PORT}")
 
 # ==========================================
-# 5. إعداد عميل Pyrogram الفائق (8x Concurrent MTProto Transfers)
+# 5. إعداد عميل Pyrogram الفائق (16 Workers)
 # ==========================================
 bot = Client(
     "downloader_bot",
@@ -373,7 +373,7 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     workdir=".",
-    max_concurrent_transfers=8
+    workers=16
 )
 
 # ==========================================
@@ -1184,7 +1184,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 f"📄 <b>File:</b> <code>{filename}</code>\n"
                                 f"{icon} <b>Category:</b> {category_desc}\n"
                                 f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                                f"🚀 <b>Stealth Engine:</b> 8x Concurrent Upload Active\n"
+                                f"🚀 <b>Auto-Resume Engine:</b> {target_prof} (Retry {retry_idx+1})\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
                             await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
