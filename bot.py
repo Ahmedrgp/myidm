@@ -1135,7 +1135,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
 
         profiles = [
             ("chrome124", referer_header),
-            ("firefox120", "https://www.google.com/"),
+            ("chrome120", "https://www.google.com/"),
             ("safari15_5", direct_url)
         ]
 
