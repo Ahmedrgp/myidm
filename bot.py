@@ -365,14 +365,15 @@ async def start_web_server():
     logger.info(f"🌐 خادم الويب الشغّال (OMNIPOTENT ENGINE) يعمل على المنفذ: {PORT}")
 
 # ==========================================
-# 5. إعداد عميل Pyrogram
+# 5. إعداد عميل Pyrogram الفائق (8x Concurrent MTProto Transfers)
 # ==========================================
 bot = Client(
     "downloader_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workdir="."
+    workdir=".",
+    max_concurrent_transfers=8
 )
 
 # ==========================================
@@ -1143,7 +1144,6 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 if download_success or ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                     break
 
-                # تجربة التحميل واستكمال التنزيل التلقائي في حال توقف الـ Connection (Auto-Resume)
                 max_stalled_retries = 5
                 for retry_idx in range(max_stalled_retries):
                     if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
@@ -1184,7 +1184,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 f"📄 <b>File:</b> <code>{filename}</code>\n"
                                 f"{icon} <b>Category:</b> {category_desc}\n"
                                 f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                                f"🚀 <b>Auto-Resume Engine:</b> {target_prof} (Retry {retry_idx+1})\n"
+                                f"🚀 <b>Stealth Engine:</b> 8x Concurrent Upload Active\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
                             await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
@@ -1217,7 +1217,6 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                             lang=lang
                                         )
                                     
-                                    # كاشف التوقف الشبكي الذكي (Stall Detector 5.0s)
                                     if (time.time() - last_chunk_time) > 5.0:
                                         logger.warning(f"⚠️ Stream stalled for 5s. Auto-Resuming from byte {status_tracker['downloaded']}...")
                                         stalled = True
@@ -1232,7 +1231,6 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         await asyncio.sleep(1.0)
 
         if not download_success and not ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-            # Fallback إلى aiohttp مع محاكاة المتصفح
             timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
             async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
