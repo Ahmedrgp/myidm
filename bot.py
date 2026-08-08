@@ -429,7 +429,7 @@ async def unrestrict_direct_link(url: str) -> str:
     return url
 
 # ==========================================
-# 7. محرك التنزيل المتوازي الذكي (Adaptive Concurrency Downloader)
+# 7. التنسيق المساعد وحساب الأحجام والوقت
 # ==========================================
 def humanbytes(size: int) -> str:
     if not size:
@@ -1130,28 +1130,42 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         status_tracker = {"downloaded": 0}
         dl_start_time = time.time()
         last_update = [0]
-
         download_success = False
-        resp_headers = {}
 
-        # -------------------------------------------------------------
-        # محاولات تنزيل مرنة متعددة الخيارات لتخطي أي حظر أو 403
-        # -------------------------------------------------------------
+        profiles = [
+            ("chrome124", referer_header),
+            ("firefox120", "https://www.google.com/"),
+            ("safari15_5", direct_url)
+        ]
+
         if CURL_CFFI_AVAILABLE:
-            profiles = [
-                ("chrome124", referer_header),
-                ("firefox120", "https://www.google.com/"),
-                ("safari15_5", direct_url)
-            ]
-            
             for target_prof, target_ref in profiles:
-                headers = {**STEALTH_HEADERS, "Referer": target_ref}
-                try:
-                    async with CurlAsyncSession(impersonate=target_prof, allow_redirects=True) as session:
-                        resp = await session.get(direct_url, headers=headers, stream=True)
-                        if resp.status_code in (200, 206, 301, 302, 307, 308):
-                            resp_headers = resp.headers
-                            extracted_filename = smart_extract_filename(direct_url, resp_headers)
+                if download_success or ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                    break
+
+                # تجربة التحميل واستكمال التنزيل التلقائي في حال توقف الـ Connection (Auto-Resume)
+                max_stalled_retries = 5
+                for retry_idx in range(max_stalled_retries):
+                    if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                        break
+
+                    headers = {**STEALTH_HEADERS, "Referer": target_ref}
+                    if status_tracker["downloaded"] > 0:
+                        headers["Range"] = f"bytes={status_tracker['downloaded']}-"
+
+                    try:
+                        async with CurlAsyncSession(impersonate=target_prof, allow_redirects=True) as session:
+                            resp = await session.get(direct_url, headers=headers, stream=True)
+                            
+                            if resp.status_code not in (200, 206, 301, 302, 307, 308):
+                                break
+                            
+                            content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+                            total_size = int(content_length) if content_length and content_length.isdigit() else 0
+                            if resp.status_code == 206 and total_size:
+                                total_size += status_tracker["downloaded"]
+
+                            extracted_filename = smart_extract_filename(direct_url, resp.headers)
                             _, ext = os.path.splitext(extracted_filename)
                             
                             if custom_name:
@@ -1161,11 +1175,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
 
                             icon, category_desc, is_video_type = get_god_category(filename)
                             file_path = os.path.join(DOWNLOAD_DIR, filename)
-                            
-                            content_length = resp_headers.get("Content-Length") or resp_headers.get("content-length")
-                            total_size = int(content_length) if content_length and content_length.isdigit() else 0
-                            size_disp = humanbytes(total_size) if total_size else "..."
 
+                            size_disp = humanbytes(total_size) if total_size else "..."
                             info_card = (
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                                 f"⚡ <b>OMNIPOTENT Downloader Prepared:</b>\n"
@@ -1173,19 +1184,27 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 f"📄 <b>File:</b> <code>{filename}</code>\n"
                                 f"{icon} <b>Category:</b> {category_desc}\n"
                                 f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                                f"🚀 <b>Stealth Profile:</b> {target_prof} Bypass\n"
+                                f"🚀 <b>Auto-Resume Engine:</b> {target_prof} (Retry {retry_idx+1})\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
                             await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
-                            with open(file_path, "wb") as f:
-                                async for chunk in resp.aiter_content(2048 * 1024):
+                            mode = "a+b" if status_tracker["downloaded"] > 0 else "wb"
+                            last_chunk_time = time.time()
+                            stalled = False
+
+                            with open(file_path, mode) as f:
+                                if status_tracker["downloaded"] > 0:
+                                    f.seek(status_tracker["downloaded"])
+                                
+                                async for chunk in resp.aiter_content(1024 * 1024):
                                     if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                                         await status_msg.edit_text("🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                         return
                                     if chunk:
                                         f.write(chunk)
                                         status_tracker["downloaded"] += len(chunk)
+                                        last_chunk_time = time.time()
                                         await progress_bar(
                                             status_tracker["downloaded"],
                                             total_size,
@@ -1197,13 +1216,22 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                             task_id=task_id,
                                             lang=lang
                                         )
-                            download_success = True
-                            break
-                except Exception as ex:
-                    logger.warning(f"Stealth profile {target_prof} attempt failed: {ex}")
-                    continue
+                                    
+                                    # كاشف التوقف الشبكي الذكي (Stall Detector 5.0s)
+                                    if (time.time() - last_chunk_time) > 5.0:
+                                        logger.warning(f"⚠️ Stream stalled for 5s. Auto-Resuming from byte {status_tracker['downloaded']}...")
+                                        stalled = True
+                                        break
 
-        if not download_success:
+                            if not stalled:
+                                download_success = True
+                                break
+
+                    except Exception as ex:
+                        logger.warning(f"Connection retry {retry_idx} error: {ex}")
+                        await asyncio.sleep(1.0)
+
+        if not download_success and not ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             # Fallback إلى aiohttp مع محاكاة المتصفح
             timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1243,7 +1271,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                     lang=lang
                                 )
         
-        actual_file_size = os.path.getsize(file_path)
+        actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
         
         if actual_file_size > MAX_SINGLE_FILE_SIZE:
             num_parts = math.ceil(actual_file_size / SPLIT_PART_SIZE)
