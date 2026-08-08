@@ -384,7 +384,7 @@ async def unrestrict_direct_link(url: str) -> str:
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
-                    resp = await session.get(url, headers=STEALTH_HEADERS)
+                    resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True)
                     if resp.status_code == 200:
                         match = re.search(r'href="(https?://download\d+\.mediafire\.com/[^"]+)"', resp.text)
                         if match:
@@ -620,7 +620,7 @@ async def probe_command_handler(client: Client, message: Message):
 
         if CURL_CFFI_AVAILABLE:
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
-            async with CurlAsyncSession(impersonate="chrome124") as session:
+            async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True) as session:
                 resp = await session.get(direct_url, headers=headers)
                 status = resp.status_code
                 clen = resp.headers.get("Content-Length", "N/A")
@@ -1070,7 +1070,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                 
                 if CURL_CFFI_AVAILABLE:
                     headers = {**STEALTH_HEADERS, "Referer": referer_header}
-                    async with CurlAsyncSession(impersonate="chrome124") as session:
+                    async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True) as session:
                         resp = await session.get(direct_url, headers=headers, stream=True)
                         fname = cname or smart_extract_filename(direct_url, resp.headers)
                         temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
@@ -1083,7 +1083,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
                     headers = {**STEALTH_HEADERS, "Referer": referer_header}
                     async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
-                        async with session.get(direct_url, headers=headers) as resp:
+                        async with session.get(direct_url, headers=headers, allow_redirects=True) as resp:
                             if resp.status == 200:
                                 fname = cname or smart_extract_filename(direct_url, resp.headers)
                                 temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
@@ -1126,76 +1126,87 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
         referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-        headers = {**STEALTH_HEADERS, "Referer": referer_header}
 
         status_tracker = {"downloaded": 0}
         dl_start_time = time.time()
         last_update = [0]
 
+        download_success = False
+        resp_headers = {}
+
         # -------------------------------------------------------------
-        # استخدام curl_cffi الذكي لتخطي حمايات Cloudflare 403 محاكاة لجوجل كروم
+        # محاولات تنزيل مرنة متعددة الخيارات لتخطي أي حظر أو 403
         # -------------------------------------------------------------
         if CURL_CFFI_AVAILABLE:
-            async with CurlAsyncSession(impersonate="chrome124") as session:
-                resp = await session.get(direct_url, headers=headers, stream=True)
-                
-                if resp.status_code not in (200, 206):
-                    await status_msg.edit_text(f"❌ <b>URL Error: Server responded with status {resp.status_code}</b>", parse_mode=ParseMode.HTML)
-                    return
-                
-                content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
-                total_size = int(content_length) if content_length and content_length.isdigit() else 0
-                
-                extracted_filename = smart_extract_filename(direct_url, resp.headers)
-                _, ext = os.path.splitext(extracted_filename)
-                
-                if custom_name:
-                    if ext and not custom_name.lower().endswith(ext.lower()):
-                        filename = f"{custom_name}{ext}"
-                    else:
-                        filename = custom_name
-                else:
-                    filename = extracted_filename
+            profiles = [
+                ("chrome124", referer_header),
+                ("firefox120", "https://www.google.com/"),
+                ("safari15_5", direct_url)
+            ]
+            
+            for target_prof, target_ref in profiles:
+                headers = {**STEALTH_HEADERS, "Referer": target_ref}
+                try:
+                    async with CurlAsyncSession(impersonate=target_prof, allow_redirects=True) as session:
+                        resp = await session.get(direct_url, headers=headers, stream=True)
+                        if resp.status_code in (200, 206, 301, 302, 307, 308):
+                            resp_headers = resp.headers
+                            extracted_filename = smart_extract_filename(direct_url, resp_headers)
+                            _, ext = os.path.splitext(extracted_filename)
+                            
+                            if custom_name:
+                                filename = f"{custom_name}{ext}" if ext and not custom_name.lower().endswith(ext.lower()) else custom_name
+                            else:
+                                filename = extracted_filename
 
-                icon, category_desc, is_video_type = get_god_category(filename)
-                force_video = False if settings["upload_mode"] == "doc" else is_video_type
-                file_path = os.path.join(DOWNLOAD_DIR, filename)
+                            icon, category_desc, is_video_type = get_god_category(filename)
+                            file_path = os.path.join(DOWNLOAD_DIR, filename)
+                            
+                            content_length = resp_headers.get("Content-Length") or resp_headers.get("content-length")
+                            total_size = int(content_length) if content_length and content_length.isdigit() else 0
+                            size_disp = humanbytes(total_size) if total_size else "..."
 
-                size_disp = humanbytes(total_size) if total_size else "..."
-                info_card = (
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"⚡ <b>OMNIPOTENT Downloader Prepared:</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📄 <b>File:</b> <code>{filename}</code>\n"
-                    f"{icon} <b>Category:</b> {category_desc}\n"
-                    f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                    f"🚀 <b>Stealth Engine:</b> Chrome 124 TLS Bypass Active\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                )
-                await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
-
-                with open(file_path, "wb") as f:
-                    async for chunk in resp.aiter_content(2048 * 1024):
-                        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                            await status_msg.edit_text("🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
-                            return
-                        if chunk:
-                            f.write(chunk)
-                            status_tracker["downloaded"] += len(chunk)
-                            await progress_bar(
-                                status_tracker["downloaded"],
-                                total_size,
-                                tr(lang, "downloading"),
-                                status_msg,
-                                dl_start_time,
-                                last_update,
-                                icon="⚡",
-                                task_id=task_id,
-                                lang=lang
+                            info_card = (
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"⚡ <b>OMNIPOTENT Downloader Prepared:</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"📄 <b>File:</b> <code>{filename}</code>\n"
+                                f"{icon} <b>Category:</b> {category_desc}\n"
+                                f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
+                                f"🚀 <b>Stealth Profile:</b> {target_prof} Bypass\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
-        else:
-            # Fallback إلى aiohttp في حال عدم وجود curl_cffi
+                            await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+
+                            with open(file_path, "wb") as f:
+                                async for chunk in resp.aiter_content(2048 * 1024):
+                                    if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                                        await status_msg.edit_text("🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                        return
+                                    if chunk:
+                                        f.write(chunk)
+                                        status_tracker["downloaded"] += len(chunk)
+                                        await progress_bar(
+                                            status_tracker["downloaded"],
+                                            total_size,
+                                            tr(lang, "downloading"),
+                                            status_msg,
+                                            dl_start_time,
+                                            last_update,
+                                            icon="⚡",
+                                            task_id=task_id,
+                                            lang=lang
+                                        )
+                            download_success = True
+                            break
+                except Exception as ex:
+                    logger.warning(f"Stealth profile {target_prof} attempt failed: {ex}")
+                    continue
+
+        if not download_success:
+            # Fallback إلى aiohttp مع محاكاة المتصفح
             timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
+            headers = {**STEALTH_HEADERS, "Referer": referer_header}
             async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
                 async with session.get(direct_url, headers=headers, allow_redirects=True) as response:
                     if response.status not in (200, 206):
@@ -1207,30 +1218,9 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     
                     extracted_filename = smart_extract_filename(direct_url, response.headers)
                     _, ext = os.path.splitext(extracted_filename)
-                    
-                    if custom_name:
-                        if ext and not custom_name.lower().endswith(ext.lower()):
-                            filename = f"{custom_name}{ext}"
-                        else:
-                            filename = custom_name
-                    else:
-                        filename = extracted_filename
-
+                    filename = f"{custom_name}{ext}" if custom_name else extracted_filename
                     icon, category_desc, is_video_type = get_god_category(filename)
-                    force_video = False if settings["upload_mode"] == "doc" else is_video_type
                     file_path = os.path.join(DOWNLOAD_DIR, filename)
-
-                    size_disp = humanbytes(total_size) if total_size else "..."
-                    info_card = (
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"⚡ <b>OMNIPOTENT Downloader Prepared:</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"📄 <b>File:</b> <code>{filename}</code>\n"
-                        f"{icon} <b>Category:</b> {category_desc}\n"
-                        f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                    )
-                    await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
                     with open(file_path, "wb") as f:
                         async for chunk in response.content.iter_chunked(2048 * 1024):
@@ -1303,6 +1293,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             await status_msg.edit_text("🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
             return
 
+        force_video = False if settings["upload_mode"] == "doc" else is_video_type
         if force_video:
             await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
         else:
