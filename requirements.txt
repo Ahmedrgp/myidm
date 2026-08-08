@@ -1,0 +1,8 @@
+pyrogram
+tgcrypto
+pycryptodome
+aiohttp
+brotli
+torrentp
+libtorrent
+python-dotenv
