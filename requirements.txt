@@ -4,5 +4,4 @@ pycryptodome
 aiohttp
 brotli
 torrentp
-libtorrent
 python-dotenv
