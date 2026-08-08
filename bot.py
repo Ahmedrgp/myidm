@@ -377,7 +377,7 @@ bot = Client(
 )
 
 # ==========================================
-# 6. مستخرج ومفكك الروابط المطلق
+# 6. مستخرج ومفكك الروابط المطلق وتخطي صفحات الويب (Web Page & HTML Unrestrict Resolver)
 # ==========================================
 async def unrestrict_direct_link(url: str) -> str:
     # Mediafire
@@ -406,6 +406,26 @@ async def unrestrict_direct_link(url: str) -> str:
         file_id = url.split("pixeldrain.com/u/")[1].split("?")[0].split("/")[0]
         return f"https://pixeldrain.com/api/file/{file_id}"
 
+    # AN1 (an1.net / an1.com / files.an1.net)
+    if "an1.net" in url or "an1.com" in url:
+        try:
+            if CURL_CFFI_AVAILABLE:
+                async with CurlAsyncSession(impersonate="chrome124") as session:
+                    resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True)
+                    if resp.status_code == 200:
+                        # البحث عن رابط التنزيل المباشر للملف الأصلي
+                        direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar)[^"\']*)["\']', resp.text, re.IGNORECASE)
+                        if direct_file_matches:
+                            return direct_file_matches[0]
+                        
+                        # البحث عن روابط أزرار التنزيل أو السيرفرات التابعة لـ AN1
+                        an1_download_links = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', resp.text, re.IGNORECASE)
+                        for dlink in an1_download_links:
+                            if "an1" in dlink or "file" in dlink or "download" in dlink:
+                                return dlink
+        except Exception:
+            pass
+
     # GitHub Blob
     if "github.com" in url and "/blob/" in url:
         return url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
@@ -426,6 +446,19 @@ async def unrestrict_direct_link(url: str) -> str:
     # Catbox
     if "catbox.moe" in url:
         return url
+
+    # فاحص عام لصفحات الويب (في حال قام المستخدم بإرسال رابط صفحة بدلاً من الرابط المباشر)
+    try:
+        if CURL_CFFI_AVAILABLE:
+            async with CurlAsyncSession(impersonate="chrome124") as session:
+                resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True)
+                ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
+                if "text/html" in ctype and len(resp.text) < 1500 * 1024:
+                    direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', resp.text, re.IGNORECASE)
+                    if direct_matches:
+                        return direct_matches[0]
+    except Exception:
+        pass
 
     return url
 
@@ -1159,9 +1192,24 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             
                             if resp.status_code not in (200, 206, 301, 302, 307, 308):
                                 break
-                            
+
+                            # فحص ما إذا كانت الاستجابة صفحة HTML أصغر من 300 كيلوبايت وليست ملفاً حقيقياً
+                            ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
                             content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
                             total_size = int(content_length) if content_length and content_length.isdigit() else 0
+
+                            if "text/html" in ctype and total_size < 300 * 1024 and not download_success:
+                                html_text = resp.text
+                                direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_text, re.IGNORECASE)
+                                if direct_file_matches:
+                                    direct_url = direct_file_matches[0]
+                                    parsed_url = urllib.parse.urlparse(direct_url)
+                                    referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                                    # إعادة المحاولة بالرابط المباشر للملف الأصلي
+                                    resp = await session.get(direct_url, headers={**STEALTH_HEADERS, "Referer": referer_header}, stream=True)
+                                    content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+                                    total_size = int(content_length) if content_length and content_length.isdigit() else 0
+
                             if resp.status_code == 206 and total_size:
                                 total_size += status_tracker["downloaded"]
 
@@ -1184,7 +1232,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 f"📄 <b>File:</b> <code>{filename}</code>\n"
                                 f"{icon} <b>Category:</b> {category_desc}\n"
                                 f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                                f"🚀 <b>Auto-Resume Engine:</b> {target_prof} (Retry {retry_idx+1})\n"
+                                f"🚀 <b>Auto-Unrestrict Web Page Active</b>\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
                             await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
@@ -1271,6 +1319,20 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
         
+        # فحص إضافي: إذا كان الملف المحمل صفحة HTML صغيرة وتم تنزيلها بالخطأ لكولنها زر تنزيل
+        if actual_file_size < 150 * 1024 and file_path and os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f_check:
+                head_sample = f_check.read(1024).lower()
+                if "<!doctype html" in head_sample or "<html" in head_sample:
+                    # هذه صفحة ويب وليست الملف الأصلي، استخرج رابط الملف الحقيقي
+                    direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', head_sample, re.IGNORECASE)
+                    if direct_matches:
+                        real_url = direct_matches[0]
+                        os.remove(file_path)
+                        # إعادة التنزيل بالرابط المباشر
+                        await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg)
+                        return
+
         if actual_file_size > MAX_SINGLE_FILE_SIZE:
             num_parts = math.ceil(actual_file_size / SPLIT_PART_SIZE)
             await status_msg.edit_text(
