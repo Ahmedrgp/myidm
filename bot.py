@@ -366,7 +366,7 @@ async def start_web_server():
     logger.info(f"🌐 خادم الويب الشغّال (OMNIPOTENT ENGINE) يعمل على المنفذ: {PORT}")
 
 # ==========================================
-# 5. إعداد عميل Pyrogram الفائق (4 Workers لإبقاء الـ RAM أقل من 512MB)
+# 5. إعداد عميل Pyrogram الفائق (4 Workers)
 # ==========================================
 bot = Client(
     "downloader_bot",
@@ -378,7 +378,43 @@ bot = Client(
 )
 
 # ==========================================
-# 6. مستخرج ومفكك الروابط المطلق خفيف الذاكرة (Memory-Safe Streamed Unrestrict Resolver)
+# 6. فحص التوقيع الرقمي للبايتات (Binary Magic Bytes Signature Verification)
+# ==========================================
+def is_valid_binary_apk(filepath: str) -> tuple:
+    """
+    يفحص التوقيع الرقمي البنائي للملف المفرغ للتأكد من أنه ليس صفحة HTML.
+    يرجع (True/False, HTML_Sample)
+    """
+    if not os.path.exists(filepath):
+        return False, ""
+    
+    file_size = os.path.getsize(filepath)
+    with open(filepath, "rb") as f:
+        header = f.read(4096)
+
+    header_lower = header.lower()
+    if b"<!doctype html" in header_lower or b"<html" in header_lower or b"<script" in header_lower or b"window.location" in header_lower or b"<div" in header_lower:
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
+                return False, f_full.read(200 * 1024)
+        except Exception:
+            return False, header.decode("utf-8", errors="ignore")
+
+    # ملفات الـ APK / ZIP تبدأ بالتوقيع b'PK\x03\x04'
+    if filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")):
+        if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06") or file_size > 3 * 1024 * 1024:
+            return True, ""
+        # إذا كان الحجم أقل من 3MB ولا يبدأ بـ PK، فهو غالباً صفحة تحويل
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
+                return False, f_full.read(200 * 1024)
+        except Exception:
+            return False, header.decode("utf-8", errors="ignore")
+
+    return True, ""
+
+# ==========================================
+# 7. مستخرج ومفكك الروابط المطلق خفيف الذاكرة (Memory-Safe Streamed Unrestrict Resolver)
 # ==========================================
 async def unrestrict_direct_link(url: str) -> str:
     # Mediafire
@@ -405,28 +441,30 @@ async def unrestrict_direct_link(url: str) -> str:
         file_id = url.split("pixeldrain.com/u/")[1].split("?")[0].split("/")[0]
         return f"https://pixeldrain.com/api/file/{file_id}"
 
-    # AN1 (an1.net / an1.com / files.an1.net)
+    # AN1 / Files.an1.net / AN1.com
     if "an1.net" in url or "an1.com" in url:
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
                     resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True, stream=True)
                     if resp.status_code == 200:
-                        ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
-                        if "text/html" in ctype:
-                            content_bytes = bytearray()
-                            async for chunk in resp.aiter_content(32 * 1024):
-                                content_bytes.extend(chunk)
-                                if len(content_bytes) >= 128 * 1024:
-                                    break
-                            html_sample = content_bytes.decode("utf-8", errors="ignore")
-                            direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar)[^"\']*)["\']', html_sample, re.IGNORECASE)
-                            if direct_file_matches:
-                                return direct_file_matches[0]
-                            an1_download_links = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', html_sample, re.IGNORECASE)
-                            for dlink in an1_download_links:
-                                if "an1" in dlink or "file" in dlink or "download" in dlink:
-                                    return dlink
+                        content_bytes = bytearray()
+                        async for chunk in resp.aiter_content(32 * 1024):
+                            content_bytes.extend(chunk)
+                            if len(content_bytes) >= 200 * 1024:
+                                break
+                        html_sample = content_bytes.decode("utf-8", errors="ignore")
+                        
+                        # استخراج الروابط المباشرة لملفات الألعاب .apk
+                        direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar)[^"\']*)["\']', html_sample, re.IGNORECASE)
+                        if direct_file_matches:
+                            return direct_file_matches[0]
+                        
+                        # استخراج روابط أزرار التحميل
+                        an1_download_links = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', html_sample, re.IGNORECASE)
+                        for dlink in an1_download_links:
+                            if "an1" in dlink or "file" in dlink or "download" in dlink:
+                                return dlink
         except Exception:
             pass
 
@@ -456,24 +494,22 @@ async def unrestrict_direct_link(url: str) -> str:
         if CURL_CFFI_AVAILABLE:
             async with CurlAsyncSession(impersonate="chrome124") as session:
                 resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True, stream=True)
-                ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
-                if "text/html" in ctype:
-                    content_bytes = bytearray()
-                    async for chunk in resp.aiter_content(32 * 1024):
-                        content_bytes.extend(chunk)
-                        if len(content_bytes) >= 128 * 1024:
-                            break
-                    html_sample = content_bytes.decode("utf-8", errors="ignore")
-                    direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
-                    if direct_matches:
-                        return direct_matches[0]
+                content_bytes = bytearray()
+                async for chunk in resp.aiter_content(32 * 1024):
+                    content_bytes.extend(chunk)
+                    if len(content_bytes) >= 128 * 1024:
+                        break
+                html_sample = content_bytes.decode("utf-8", errors="ignore")
+                direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
+                if direct_matches:
+                    return direct_matches[0]
     except Exception:
         pass
 
     return url
 
 # ==========================================
-# 7. التنسيق المساعد وحساب الأحجام والوقت
+# 8. التنسيق المساعد وحساب الأحجام والوقت
 # ==========================================
 def humanbytes(size: int) -> str:
     if not size:
@@ -1206,26 +1242,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             if resp.status_code not in (200, 206, 301, 302, 307, 308):
                                 break
 
-                            ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
                             content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
                             total_size = int(content_length) if content_length and content_length.isdigit() else 0
-
-                            # فحص ما إذا كانت الاستجابة صفحة HTML من عينة البث دون شحن الـ RAM
-                            if "text/html" in ctype and total_size < 300 * 1024 and not download_success:
-                                content_bytes = bytearray()
-                                async for chunk in resp.aiter_content(32 * 1024):
-                                    content_bytes.extend(chunk)
-                                    if len(content_bytes) >= 128 * 1024:
-                                        break
-                                html_sample = content_bytes.decode("utf-8", errors="ignore")
-                                direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
-                                if direct_file_matches:
-                                    direct_url = direct_file_matches[0]
-                                    parsed_url = urllib.parse.urlparse(direct_url)
-                                    referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-                                    resp = await session.get(direct_url, headers={**STEALTH_HEADERS, "Referer": referer_header}, stream=True)
-                                    content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
-                                    total_size = int(content_length) if content_length and content_length.isdigit() else 0
 
                             if resp.status_code == 206 and total_size:
                                 total_size += status_tracker["downloaded"]
@@ -1336,17 +1354,27 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
         
-        # فحص إضافي محمي الذاكرة للـ HTML
-        if actual_file_size < 150 * 1024 and file_path and os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f_check:
-                head_sample = f_check.read(4096).lower()
-                if "<!doctype html" in head_sample or "<html" in head_sample:
-                    direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', head_sample, re.IGNORECASE)
-                    if direct_matches:
-                        real_url = direct_matches[0]
-                        os.remove(file_path)
-                        await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg)
-                        return
+        # =========================================================================
+        # فحص التوقيع البنائي (Binary Magic Bytes Signature Check)
+        # =========================================================================
+        is_binary, html_sample = is_valid_binary_apk(file_path)
+        if not is_binary and file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            # استخراج الرابط المباشر الحقيقي المخبأ في كود الـ HTML
+            direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
+            if not direct_matches:
+                # تجربة استخراج روابط أزرار التنزيل أو روابط الـ JS
+                direct_matches = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', html_sample, re.IGNORECASE)
+            
+            if direct_matches:
+                real_url = direct_matches[0]
+                logger.info(f"🔗 Real direct APK URL extracted from HTML page: {real_url}")
+                # إعادة التنزيل بالرابط المباشر الأصلي تلقائياً
+                await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg)
+                return
+            else:
+                await status_msg.edit_text("❌ <b>URL is an HTML webpage, not a direct file link!</b>", parse_mode=ParseMode.HTML)
+                return
 
         if actual_file_size > MAX_SINGLE_FILE_SIZE:
             num_parts = math.ceil(actual_file_size / SPLIT_PART_SIZE)
@@ -1478,7 +1506,13 @@ async def main():
     await bot.stop()
 
 if __name__ == "__main__":
-    try:
-        bot.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot stopped.")
+    while True:
+        try:
+            bot.run(main())
+            break
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Bot stopped.")
+            break
+        except Exception as e:
+            logger.error(f"Restarting bot due to exception: {e}")
+            time.sleep(3)
