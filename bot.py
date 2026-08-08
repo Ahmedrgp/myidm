@@ -422,7 +422,7 @@ def extract_real_download_link_from_html(html_text: str, original_url: str) -> s
 
         if any(link_lower.endswith(ext) or f"{ext}?" in link_lower for ext in ('.apk', '.xapk', '.apks', '.zip', '.rar', '.7z')):
             candidate_links.append(link)
-        elif any(kw in link_lower for kw in ("d.an1.com", "/downloads/", "/download/", "download_link", "file_download")):
+        elif any(kw in link_lower for kw in ("d.an1.com", "d.an1.net", "/downloads/", "/download/", "download_link", "file_download")):
             candidate_links.append(link)
 
     if candidate_links:
@@ -438,7 +438,7 @@ def extract_real_download_link_from_html(html_text: str, original_url: str) -> s
     return ""
 
 # ==========================================
-# 7. مستخرج ومفكك الروابط المطلق خفيف الذاكرة (Memory-Safe Streamed Unrestrict Resolver)
+# 7. مستخرج ومفكك الروابط المطلق مع محاكاة الـ Referer المباشرة
 # ==========================================
 async def unrestrict_direct_link(url: str) -> str:
     # Mediafire
@@ -465,19 +465,32 @@ async def unrestrict_direct_link(url: str) -> str:
         file_id = url.split("pixeldrain.com/u/")[1].split("?")[0].split("/")[0]
         return f"https://pixeldrain.com/api/file/{file_id}"
 
-    # AN1 / Files.an1.net / AN1.com
+    # AN1 (an1.net / an1.com / files.an1.net) مع فرض Referer المباشر
     if "an1.net" in url or "an1.com" in url:
+        target_ref = "https://an1.com/" if "an1.com" in url else "https://an1.net/"
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
-                    resp = await session.get(url, headers=STEALTH_HEADERS, allow_redirects=True, stream=True)
+                    headers = {**STEALTH_HEADERS, "Referer": target_ref}
+                    resp = await session.get(url, headers=headers, allow_redirects=True, stream=True)
                     if resp.status_code == 200:
+                        ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
+                        if "vnd.android.package-archive" in ctype or "octet-stream" in ctype:
+                            if resp.url and resp.url != url:
+                                return resp.url
+
                         content_bytes = bytearray()
                         async for chunk in resp.aiter_content(32 * 1024):
                             content_bytes.extend(chunk)
                             if len(content_bytes) >= 200 * 1024:
                                 break
                         html_sample = content_bytes.decode("utf-8", errors="ignore")
+                        
+                        # البحث عن سيرفرات التنزيل لـ AN1 (d.an1.com)
+                        an1_direct = re.findall(r'href=["\'](https?://d\d*\.an1\.(?:com|net)/[^"\']+)["\']', html_sample, re.IGNORECASE)
+                        if an1_direct:
+                            return an1_direct[0]
+                        
                         extracted = extract_real_download_link_from_html(html_sample, url)
                         if extracted:
                             return extracted
@@ -720,7 +733,7 @@ async def probe_command_handler(client: Client, message: Message):
     try:
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
-        referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+        referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         if CURL_CFFI_AVAILABLE:
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1173,7 +1186,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                 await status_msg.edit_text(f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
                 direct_url = await unrestrict_direct_link(raw_url)
                 parsed_url = urllib.parse.urlparse(direct_url)
-                referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
                 
                 if CURL_CFFI_AVAILABLE:
                     headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1237,7 +1250,12 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
     try:
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
-        referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+        
+        # فرض Referer المناسب تلقائياً لكل سيرفر
+        if "an1.net" in direct_url or "an1.com" in direct_url:
+            referer_header = "https://an1.com/" if "an1.com" in direct_url else "https://an1.net/"
+        else:
+            referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         status_tracker = {"downloaded": 0}
         dl_start_time = time.time()
