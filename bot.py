@@ -380,7 +380,7 @@ bot = Client(
 # ==========================================
 # 6. فحص التوقيع الرقمي للبايتات (Binary Magic Bytes Signature Verification)
 # ==========================================
-def is_valid_binary_apk(filepath: str) -> tuple:
+def is_valid_binary_file(filepath: str) -> tuple:
     """
     يفحص التوقيع الرقمي البنائي للملف المفرغ للتأكد من أنه ليس صفحة HTML.
     يرجع (True/False, HTML_Sample)
@@ -404,7 +404,6 @@ def is_valid_binary_apk(filepath: str) -> tuple:
     if filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")):
         if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06") or file_size > 3 * 1024 * 1024:
             return True, ""
-        # إذا كان الحجم أقل من 3MB ولا يبدأ بـ PK، فهو غالباً صفحة تحويل
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
                 return False, f_full.read(200 * 1024)
@@ -412,6 +411,39 @@ def is_valid_binary_apk(filepath: str) -> tuple:
             return False, header.decode("utf-8", errors="ignore")
 
     return True, ""
+
+def extract_real_download_link_from_html(html_text: str, original_url: str) -> str:
+    """
+    استخراج الرابط المباشر الحقيقي مع تصفية الإعلانات وروابط التطبيقات الإعلانية مثل an1store.apk
+    """
+    if not html_text:
+        return ""
+
+    forbidden = ["an1store.apk", "store.apk", "googleplay", "telegram", "play.google.com", "ad.doubleclick"]
+    all_links = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
+    
+    candidate_links = []
+    for link in all_links:
+        link_lower = link.lower()
+        if any(f in link_lower for f in forbidden):
+            continue
+
+        if any(link_lower.endswith(ext) or f"{ext}?" in link_lower for ext in ('.apk', '.xapk', '.apks', '.zip', '.rar', '.7z')):
+            candidate_links.append(link)
+        elif any(kw in link_lower for kw in ("d.an1.com", "/downloads/", "/download/", "download_link", "file_download")):
+            candidate_links.append(link)
+
+    if candidate_links:
+        parsed_orig = urllib.parse.urlparse(original_url)
+        orig_name = os.path.basename(parsed_orig.path).replace(".html", "")
+        if orig_name:
+            orig_name_clean = re.sub(r'[^a-zA-Z0-9]', '', orig_name.split('-')[0]).lower()
+            for cl in candidate_links:
+                if orig_name_clean and orig_name_clean in cl.lower():
+                    return cl
+        return candidate_links[0]
+
+    return ""
 
 # ==========================================
 # 7. مستخرج ومفكك الروابط المطلق خفيف الذاكرة (Memory-Safe Streamed Unrestrict Resolver)
@@ -454,17 +486,9 @@ async def unrestrict_direct_link(url: str) -> str:
                             if len(content_bytes) >= 200 * 1024:
                                 break
                         html_sample = content_bytes.decode("utf-8", errors="ignore")
-                        
-                        # استخراج الروابط المباشرة لملفات الألعاب .apk
-                        direct_file_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar)[^"\']*)["\']', html_sample, re.IGNORECASE)
-                        if direct_file_matches:
-                            return direct_file_matches[0]
-                        
-                        # استخراج روابط أزرار التحميل
-                        an1_download_links = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', html_sample, re.IGNORECASE)
-                        for dlink in an1_download_links:
-                            if "an1" in dlink or "file" in dlink or "download" in dlink:
-                                return dlink
+                        extracted = extract_real_download_link_from_html(html_sample, url)
+                        if extracted:
+                            return extracted
         except Exception:
             pass
 
@@ -500,9 +524,9 @@ async def unrestrict_direct_link(url: str) -> str:
                     if len(content_bytes) >= 128 * 1024:
                         break
                 html_sample = content_bytes.decode("utf-8", errors="ignore")
-                direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
-                if direct_matches:
-                    return direct_matches[0]
+                extracted = extract_real_download_link_from_html(html_sample, url)
+                if extracted:
+                    return extracted
     except Exception:
         pass
 
@@ -1196,7 +1220,11 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
             except Exception: pass
         gc.collect()
 
-async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message):
+async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
+    if hop_count >= 2:
+        await status_msg.edit_text("❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
+        return
+
     file_path = None
     start_time = time.time()
     task_id = f"task_{int(time.time() * 1000)}"
@@ -1355,22 +1383,16 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
         
         # =========================================================================
-        # فحص التوقيع البنائي (Binary Magic Bytes Signature Check)
+        # فحص التوقيع البنائي (Binary Magic Bytes Signature Check) بدون حلقة مفرغة
         # =========================================================================
-        is_binary, html_sample = is_valid_binary_apk(file_path)
+        is_binary, html_sample = is_valid_binary_file(file_path)
         if not is_binary and file_path and os.path.exists(file_path):
             os.remove(file_path)
-            # استخراج الرابط المباشر الحقيقي المخبأ في كود الـ HTML
-            direct_matches = re.findall(r'href=["\'](https?://[^"\']+\.(?:apk|xapk|apks|zip|rar|7z|mp4|mkv|pdf|exe|msi)[^"\']*)["\']', html_sample, re.IGNORECASE)
-            if not direct_matches:
-                # تجربة استخراج روابط أزرار التنزيل أو روابط الـ JS
-                direct_matches = re.findall(r'href=["\'](https?://[^"\']*(?:download|file|cdn|get)[^"\']*)["\']', html_sample, re.IGNORECASE)
+            real_url = extract_real_download_link_from_html(html_sample, raw_url)
             
-            if direct_matches:
-                real_url = direct_matches[0]
-                logger.info(f"🔗 Real direct APK URL extracted from HTML page: {real_url}")
-                # إعادة التنزيل بالرابط المباشر الأصلي تلقائياً
-                await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg)
+            if real_url and real_url != raw_url:
+                logger.info(f"🔗 Real direct APK URL extracted: {real_url}")
+                await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg, hop_count=hop_count+1)
                 return
             else:
                 await status_msg.edit_text("❌ <b>URL is an HTML webpage, not a direct file link!</b>", parse_mode=ParseMode.HTML)
@@ -1506,13 +1528,7 @@ async def main():
     await bot.stop()
 
 if __name__ == "__main__":
-    while True:
-        try:
-            bot.run(main())
-            break
-        except (KeyboardInterrupt, SystemExit):
-            logger.info("Bot stopped.")
-            break
-        except Exception as e:
-            logger.error(f"Restarting bot due to exception: {e}")
-            time.sleep(3)
+    try:
+        bot.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped.")
