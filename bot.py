@@ -381,10 +381,6 @@ bot = Client(
 # 6. فحص التوقيع الرقمي للبايتات (Binary Magic Bytes Signature Verification)
 # ==========================================
 def is_valid_binary_file(filepath: str) -> tuple:
-    """
-    يفحص التوقيع الرقمي البنائي للملف المفرغ للتأكد من أنه ليس صفحة HTML.
-    يرجع (True/False, HTML_Sample)
-    """
     if not os.path.exists(filepath):
         return False, ""
     
@@ -400,7 +396,6 @@ def is_valid_binary_file(filepath: str) -> tuple:
         except Exception:
             return False, header.decode("utf-8", errors="ignore")
 
-    # ملفات الـ APK / ZIP تبدأ بالتوقيع b'PK\x03\x04'
     if filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")):
         if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06") or file_size > 3 * 1024 * 1024:
             return True, ""
@@ -413,9 +408,6 @@ def is_valid_binary_file(filepath: str) -> tuple:
     return True, ""
 
 def extract_real_download_link_from_html(html_text: str, original_url: str) -> str:
-    """
-    استخراج الرابط المباشر الحقيقي مع تصفية الإعلانات وروابط التطبيقات الإعلانية مثل an1store.apk
-    """
     if not html_text:
         return ""
 
@@ -648,7 +640,7 @@ async def progress_bar(current: int, total: int, status_text: str, message: Mess
     now = time.time()
     diff = now - start_time
     
-    if current != total and (now - last_update[0]) < 2.0:
+    if current != total and (now - last_update[0]) < 3.0:
         return
 
     last_update[0] = now
@@ -679,7 +671,7 @@ async def progress_bar(current: int, total: int, status_text: str, message: Mess
     try:
         await message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     except FloodWait as e:
-        await asyncio.sleep(e.value)
+        await asyncio.sleep(e.value + 1)
     except (RPCError, MessageNotModified):
         pass
 
@@ -694,7 +686,11 @@ async def start_handler(client: Client, message: Message):
     sender = message.from_user.first_name if message.from_user else 'Master'
     
     welcome_text = tr(st["lang"], "welcome", name=sender)
-    await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+    try:
+        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+    except FloodWait as e:
+        await asyncio.sleep(e.value + 1)
+        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("god") | filters.command("godmode") | filters.command("omnipotent"))
 async def god_panel_handler(client: Client, message: Message):
@@ -703,7 +699,11 @@ async def god_panel_handler(client: Client, message: Message):
     g_stats = db_get_global_stats()
     
     god_card = tr(st["lang"], "god_panel", threads=st['god_threads'], files=g_stats['files'], bytes=humanbytes(g_stats['bytes']))
-    await message.reply_text(god_card, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+    try:
+        await message.reply_text(god_card, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+    except FloodWait as e:
+        await asyncio.sleep(e.value + 1)
+        await message.reply_text(god_card, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("probe"))
 async def probe_command_handler(client: Client, message: Message):
@@ -1028,6 +1028,7 @@ async def queue_worker():
         except Exception as e:
             logger.exception(f"خطأ أثناء معالجة المهمة: {e}")
         finally:
+            await asyncio.sleep(1.0)
             request_queue.task_done()
             gc.collect()
 
