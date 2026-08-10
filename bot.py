@@ -462,8 +462,9 @@ async def unrestrict_direct_link(url: str) -> str:
         return f"https://pixeldrain.com/api/file/{file_id}"
 
     # AN1 (an1.net / an1.com / files.an1.net) مع فرض Referer المباشر
-    if "an1.net" in url or "an1.com" in url:
-        target_ref = "https://an1.com/" if "an1.com" in url else "https://an1.net/"
+    parsed_domain = urllib.parse.urlparse(url).netloc.lower()
+    if "an1.net" in parsed_domain or "an1.com" in parsed_domain:
+        target_ref = f"{urllib.parse.urlparse(url).scheme}://{parsed_domain}/"
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
@@ -729,7 +730,7 @@ async def probe_command_handler(client: Client, message: Message):
     try:
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
-        referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
+        referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         if CURL_CFFI_AVAILABLE:
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1182,7 +1183,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                 await status_msg.edit_text(f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
                 direct_url = await unrestrict_direct_link(raw_url)
                 parsed_url = urllib.parse.urlparse(direct_url)
-                referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
                 
                 if CURL_CFFI_AVAILABLE:
                     headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1247,11 +1248,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
         
-        # فرض Referer المناسب تلقائياً لكل سيرفر
-        if "an1.net" in direct_url or "an1.com" in direct_url:
-            referer_header = "https://an1.com/" if "an1.com" in direct_url else "https://an1.net/"
-        else:
-            referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+        # فرض Referer المناسب تلقائياً لكل سيرفر بحسب الـ Domain الحقيقي
+        referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         status_tracker = {"downloaded": 0}
         dl_start_time = time.time()
