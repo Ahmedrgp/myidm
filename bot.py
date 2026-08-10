@@ -388,17 +388,13 @@ def is_valid_binary_file(filepath: str) -> tuple:
     with open(filepath, "rb") as f:
         header = f.read(4096)
 
-    header_lower = header.lower()
-    if b"<!doctype html" in header_lower or b"<html" in header_lower or b"<script" in header_lower or b"window.location" in header_lower or b"<div" in header_lower:
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
-                return False, f_full.read(200 * 1024)
-        except Exception:
-            return False, header.decode("utf-8", errors="ignore")
+    # 1. إذا كان الملف يبدأ بتوقيع ملفات ZIP/APK (PK\x03\x04 أو PK\x05\x06) أو حجمه كبير، فهو ملف ثنائي صحيح 100%
+    if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06") or (filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")) and file_size > 3 * 1024 * 1024):
+        return True, ""
 
-    if filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")):
-        if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06") or file_size > 3 * 1024 * 1024:
-            return True, ""
+    # 2. فحص ما إذا كان الملف عبارة عن صفحة HTML حقيقية (تبدأ بـ <!DOCTYPE أو <html)
+    header_strip = header.lstrip().lower()
+    if header_strip.startswith((b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--")):
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
                 return False, f_full.read(200 * 1024)
