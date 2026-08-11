@@ -385,28 +385,21 @@ def is_valid_binary_file(filepath: str) -> tuple:
     with open(filepath, "rb") as f:
         header = f.read(4096)
 
-    # 1. التوقيع الرقمي الأساسي لملفات ZIP/APK الأصغر والأكبر
+    # 1. التوقيع الرقمي لملفات ZIP/APK
     if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06"):
         return True, ""
 
-    # 2. أي ملف APK حجمه أقل من 1 ميجابايت ولا يبدأ بـ PK هو قطعاً صفحة تحويل HTML وليس تطبيقاً
-    if filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")) or file_size < 1 * 1024 * 1024:
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
-                return False, f_full.read(300 * 1024)
-        except Exception:
-            return False, header.decode("utf-8", errors="ignore")
-
-    # 3. فحص صفحات HTML المباشرة والمضغوطة
+    # 2. فحص كود HTML العادي
     header_strip = header.lstrip().lower()
-    if header_strip.startswith((b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--", b"\x1f\x8b")):
+    if header_strip.startswith((b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--")):
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
                 return False, f_full.read(300 * 1024)
         except Exception:
             return False, header.decode("utf-8", errors="ignore")
 
-    if file_size > 2 * 1024 * 1024:
+    # إذا كان حجم الملف أكبر من 1 ميجابايت، فهو ثنائي سليم 100%
+    if file_size > 1 * 1024 * 1024:
         return True, ""
 
     return False, header.decode("utf-8", errors="ignore")
@@ -470,9 +463,8 @@ async def unrestrict_direct_link(url: str) -> str:
         return f"https://pixeldrain.com/api/file/{file_id}"
 
     # AN1 (an1.net / an1.com / files.an1.net) مع فرض Referer المباشر
-    parsed_domain = urllib.parse.urlparse(url).netloc.lower()
-    if "an1.net" in parsed_domain or "an1.com" in parsed_domain:
-        target_ref = f"{urllib.parse.urlparse(url).scheme}://{parsed_domain}/"
+    if "an1.net" in url or "an1.com" in url:
+        target_ref = "https://an1.com/"
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
@@ -738,7 +730,7 @@ async def probe_command_handler(client: Client, message: Message):
     try:
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
-        referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+        referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         if CURL_CFFI_AVAILABLE:
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1191,7 +1183,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                 await status_msg.edit_text(f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
                 direct_url = await unrestrict_direct_link(raw_url)
                 parsed_url = urllib.parse.urlparse(direct_url)
-                referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
                 
                 if CURL_CFFI_AVAILABLE:
                     headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1256,8 +1248,11 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
         
-        # فرض Referer المناسب تلقائياً لكل سيرفر بحسب الـ Domain الحقيقي
-        referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+        # فرض Referer المناسب تلقائياً لكل سيرفر
+        if "an1.net" in direct_url or "an1.com" in direct_url:
+            referer_header = "https://an1.com/"
+        else:
+            referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         status_tracker = {"downloaded": 0}
         dl_start_time = time.time()
