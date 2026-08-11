@@ -472,9 +472,8 @@ async def unrestrict_direct_link(url: str) -> str:
                     resp = await session.get(url, headers=headers, allow_redirects=True, stream=True)
                     if resp.status_code == 200:
                         ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
-                        if "vnd.android.package-archive" in ctype or "octet-stream" in ctype:
-                            if resp.url and resp.url != url:
-                                return resp.url
+                        if any(btype in ctype for btype in ("vnd.android.package-archive", "octet-stream", "zip", "x-apk", "x-xz")):
+                            return resp.url or url
 
                         content_bytes = bytearray()
                         async for chunk in resp.aiter_content(32 * 1024):
