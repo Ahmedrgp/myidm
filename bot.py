@@ -66,11 +66,8 @@ STEALTH_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "cross-site",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1"
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive"
 }
 
 # ==========================================
@@ -1395,9 +1392,30 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
         
         # =========================================================================
-        # فحص التوقيع البنائي (Binary Magic Bytes Signature Check) بدون حلقة مفرغة
+        # فحص التوقيع البنائي المزدوج مع دعم محرك System CURL الخارق
         # =========================================================================
         is_binary, html_sample = is_valid_binary_file(file_path)
+        if not is_binary and file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            
+            # محاولة استخدام المحرك الخارق (System CURL Engine) لتجاوز حماية الجدار الناري/Cloudflare
+            logger.info(f"⚡ Invoking System CURL Engine for {direct_url}...")
+            curl_cmd = [
+                "curl", "-s", "-L",
+                "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+                direct_url, "-o", file_path
+            ]
+            if referer_header:
+                curl_cmd.extend(["-H", f"Referer: {referer_header}"])
+
+            try:
+                proc = await asyncio.create_subprocess_exec(*curl_cmd)
+                await proc.communicate()
+            except Exception as curl_err:
+                logger.warning(f"CURL engine error: {curl_err}")
+
+            is_binary, html_sample = is_valid_binary_file(file_path)
+
         if not is_binary and file_path and os.path.exists(file_path):
             os.remove(file_path)
             real_url = extract_real_download_link_from_html(html_sample, raw_url)
