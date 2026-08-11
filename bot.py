@@ -385,20 +385,31 @@ def is_valid_binary_file(filepath: str) -> tuple:
     with open(filepath, "rb") as f:
         header = f.read(4096)
 
-    # 1. إذا كان الملف يبدأ بتوقيع ملفات ZIP/APK (PK\x03\x04 أو PK\x05\x06) أو حجمه كبير، فهو ملف ثنائي صحيح 100%
-    if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06") or (filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")) and file_size > 3 * 1024 * 1024):
+    # 1. التوقيع الرقمي الأساسي لملفات ZIP/APK الأصغر والأكبر
+    if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06"):
         return True, ""
 
-    # 2. فحص ما إذا كان الملف عبارة عن صفحة HTML حقيقية (تبدأ بـ <!DOCTYPE أو <html)
-    header_strip = header.lstrip().lower()
-    if header_strip.startswith((b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--")):
+    # 2. أي ملف APK حجمه أقل من 1 ميجابايت ولا يبدأ بـ PK هو قطعاً صفحة تحويل HTML وليس تطبيقاً
+    if filepath.lower().endswith((".apk", ".xapk", ".zip", ".apks")) or file_size < 1 * 1024 * 1024:
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
-                return False, f_full.read(200 * 1024)
+                return False, f_full.read(300 * 1024)
         except Exception:
             return False, header.decode("utf-8", errors="ignore")
 
-    return True, ""
+    # 3. فحص صفحات HTML المباشرة والمضغوطة
+    header_strip = header.lstrip().lower()
+    if header_strip.startswith((b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--", b"\x1f\x8b")):
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
+                return False, f_full.read(300 * 1024)
+        except Exception:
+            return False, header.decode("utf-8", errors="ignore")
+
+    if file_size > 2 * 1024 * 1024:
+        return True, ""
+
+    return False, header.decode("utf-8", errors="ignore")
 
 def extract_real_download_link_from_html(html_text: str, original_url: str) -> str:
     if not html_text:
@@ -468,8 +479,9 @@ async def unrestrict_direct_link(url: str) -> str:
                     headers = {**STEALTH_HEADERS, "Referer": target_ref}
                     resp = await session.get(url, headers=headers, allow_redirects=True, stream=True)
                     if resp.status_code == 200:
-                        ctype = (resp.headers.get("Content-Type", "") or resp.headers.get("content-type", "")).lower()
-                        if any(btype in ctype for btype in ("vnd.android.package-archive", "octet-stream", "zip", "x-apk", "x-xz")):
+                        content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+                        cl_bytes = int(content_length) if content_length and content_length.isdigit() else 0
+                        if cl_bytes > 1 * 1024 * 1024:
                             return resp.url or url
 
                         content_bytes = bytearray()
