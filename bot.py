@@ -1458,42 +1458,58 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 await status_msg.edit_text("❌ <b>URL is an HTML webpage, not a direct file link!</b>", parse_mode=ParseMode.HTML)
                 return
 
+        BOT_LIMIT_BYTES = 1950 * 1024 * 1024      # 1.95 GB الحد الأقصى المطلق للبوت لتفادي خطأ 2000 MiB
+        SPLIT_CHUNK_BYTES = 1900 * 1024 * 1024    # 1.90 GB
+
+        CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
         uploader = get_uploader_client()
         is_premium_active = (user_bot is not None) and getattr(user_bot, "is_connected", False) and (uploader == user_bot)
 
-        current_max_size = (3950 * 1024 * 1024) if is_premium_active else (1950 * 1024 * 1024)
-        current_split_size = (3900 * 1024 * 1024) if is_premium_active else (1900 * 1024 * 1024)
-
-        if actual_file_size > current_max_size:
-            num_parts = math.ceil(actual_file_size / current_split_size)
+        # إذا كان الملف أكبر من 1.95 GB، يجب تقسيمه حتماً لإرساله في شات البوت
+        if actual_file_size > BOT_LIMIT_BYTES:
+            num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
             await status_msg.edit_text(
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file ({humanbytes(actual_file_size)}) into {num_parts} parts...</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
                 parse_mode=ParseMode.HTML
             )
+
+            # إذا كانت القناة محددة والبريميوم مفعل، نرفع الملف الكامل للقناة أولاً
+            if CHANNEL_ID and is_premium_active and actual_file_size <= 3950 * 1024 * 1024:
+                try:
+                    caption_full = custom_caption if custom_caption else f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
+                    if is_video_type and settings["upload_mode"] != "doc":
+                        await uploader.send_video(chat_id=CHANNEL_ID, video=file_path, caption=caption_full, supports_streaming=True, parse_mode=ParseMode.HTML)
+                    else:
+                        await uploader.send_document(chat_id=CHANNEL_ID, document=file_path, caption=caption_full, parse_mode=ParseMode.HTML)
+                except Exception as ch_err:
+                    logger.warning(f"Channel full upload error: {ch_err}")
+
             part_number = 1
             with open(file_path, "rb") as src_file:
                 while True:
                     if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                         return
-                    chunk_data = src_file.read(current_split_size)
+                    chunk_data = src_file.read(SPLIT_CHUNK_BYTES)
                     if not chunk_data:
                         break
                     part_filename = f"{os.path.splitext(filename)[0]}.part{part_number:03d}{ext}"
                     part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
                     with open(part_filepath, "wb") as part_file:
                         part_file.write(chunk_data)
-                    CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
+
+                    # إرسال الجزء للمستخدم في الشات (يظهر دائماً وبشكل مؤكد)
                     await user_msg.reply_document(
                         document=part_filepath,
                         caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
                         parse_mode=ParseMode.HTML
                     )
-                    if CHANNEL_ID:
+
+                    # إرسال الجزء للقناة إذا لم يكن البريميوم مفعلاً لرفع الملف الكامل
+                    if CHANNEL_ID and not (is_premium_active and actual_file_size <= 3950 * 1024 * 1024):
                         try:
-                            uploader = get_uploader_client()
-                            await uploader.send_document(
+                            await user_msg._client.send_document(
                                 chat_id=CHANNEL_ID,
                                 document=part_filepath,
                                 caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
@@ -1501,10 +1517,27 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             )
                         except Exception as ch_err:
                             logger.warning(f"Channel part upload notice: {ch_err}")
+
                     if os.path.exists(part_filepath): os.remove(part_filepath)
                     part_number += 1
+
+            total_time_spent = round(time.time() - start_time)
+            avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
             db_add_history(user_id, filename, actual_file_size, category_desc)
             await status_msg.delete()
+
+            success_card = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{tr(lang, 'success_title')}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
+                f"{icon} {tr(lang, 'category')} {category_desc}\n"
+                f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} ({num_parts} Parts)</code>\n"
+                f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
+                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
             return
 
         await status_msg.edit_text(f"📤 <b>{tr(lang, 'uploading')}</b>", reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
