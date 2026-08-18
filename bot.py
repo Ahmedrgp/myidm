@@ -1458,11 +1458,17 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 await status_msg.edit_text("❌ <b>URL is an HTML webpage, not a direct file link!</b>", parse_mode=ParseMode.HTML)
                 return
 
-        if actual_file_size > MAX_SINGLE_FILE_SIZE:
-            num_parts = math.ceil(actual_file_size / SPLIT_PART_SIZE)
+        uploader = get_uploader_client()
+        is_premium_active = (user_bot is not None) and getattr(user_bot, "is_connected", False) and (uploader == user_bot)
+
+        current_max_size = (3950 * 1024 * 1024) if is_premium_active else (1950 * 1024 * 1024)
+        current_split_size = (3900 * 1024 * 1024) if is_premium_active else (1900 * 1024 * 1024)
+
+        if actual_file_size > current_max_size:
+            num_parts = math.ceil(actual_file_size / current_split_size)
             await status_msg.edit_text(
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file into {num_parts} parts...</b>\n"
+                f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file ({humanbytes(actual_file_size)}) into {num_parts} parts...</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
                 parse_mode=ParseMode.HTML
             )
@@ -1471,7 +1477,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 while True:
                     if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                         return
-                    chunk_data = src_file.read(SPLIT_PART_SIZE)
+                    chunk_data = src_file.read(current_split_size)
                     if not chunk_data:
                         break
                     part_filename = f"{os.path.splitext(filename)[0]}.part{part_number:03d}{ext}"
@@ -1521,16 +1527,21 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
         force_video = False if settings["upload_mode"] == "doc" else is_video_type
         
-        # 1. إرسال الملف مباشرة في محادثة المستخدم (يظهر دائماً بدون اختفاء)
-        if force_video:
-            await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+        # 1. إرسال الملف مباشرة في محادثة المستخدم (عبر Premium UserBot أو البوت العادي)
+        if is_premium_active:
+            if force_video:
+                await uploader.send_video(chat_id=user_msg.chat.id, video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            else:
+                await uploader.send_document(chat_id=user_msg.chat.id, document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
         else:
-            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            if force_video:
+                await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            else:
+                await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
             try:
-                uploader = get_uploader_client()
                 if force_video:
                     await uploader.send_video(chat_id=CHANNEL_ID, video=file_path, caption=caption, supports_streaming=True, parse_mode=ParseMode.HTML)
                 else:
