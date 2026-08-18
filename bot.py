@@ -1527,21 +1527,16 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
         force_video = False if settings["upload_mode"] == "doc" else is_video_type
         
-        # 1. إرسال الملف مباشرة في محادثة المستخدم (عبر Premium UserBot أو البوت العادي)
-        if is_premium_active:
-            if force_video:
-                await uploader.send_video(chat_id=user_msg.chat.id, video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
-            else:
-                await uploader.send_document(chat_id=user_msg.chat.id, document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+        # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت (ضمان كامل لظهور الملف)
+        if force_video:
+            await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
         else:
-            if force_video:
-                await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
-            else:
-                await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
             try:
+                uploader = get_uploader_client()
                 if force_video:
                     await uploader.send_video(chat_id=CHANNEL_ID, video=file_path, caption=caption, supports_streaming=True, parse_mode=ParseMode.HTML)
                 else:
