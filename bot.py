@@ -1478,13 +1478,23 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
                     with open(part_filepath, "wb") as part_file:
                         part_file.write(chunk_data)
-                    uploader = get_uploader_client()
-                    await uploader.send_document(
-                        chat_id=user_msg.chat.id,
+                    CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
+                    await user_msg.reply_document(
                         document=part_filepath,
                         caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
                         parse_mode=ParseMode.HTML
                     )
+                    if CHANNEL_ID:
+                        try:
+                            uploader = get_uploader_client()
+                            await uploader.send_document(
+                                chat_id=CHANNEL_ID,
+                                document=part_filepath,
+                                caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
+                                parse_mode=ParseMode.HTML
+                            )
+                        except Exception as ch_err:
+                            logger.warning(f"Channel part upload notice: {ch_err}")
                     if os.path.exists(part_filepath): os.remove(part_filepath)
                     part_number += 1
             db_add_history(user_id, filename, actual_file_size, category_desc)
@@ -1508,12 +1518,25 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             await status_msg.edit_text("🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
             return
 
-        uploader = get_uploader_client()
+        CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
         force_video = False if settings["upload_mode"] == "doc" else is_video_type
+        
+        # 1. إرسال الملف مباشرة في محادثة المستخدم (يظهر دائماً بدون اختفاء)
         if force_video:
-            await uploader.send_video(chat_id=user_msg.chat.id, video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
         else:
-            await uploader.send_document(chat_id=user_msg.chat.id, document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+
+        # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
+        if CHANNEL_ID:
+            try:
+                uploader = get_uploader_client()
+                if force_video:
+                    await uploader.send_video(chat_id=CHANNEL_ID, video=file_path, caption=caption, supports_streaming=True, parse_mode=ParseMode.HTML)
+                else:
+                    await uploader.send_document(chat_id=CHANNEL_ID, document=file_path, caption=caption, parse_mode=ParseMode.HTML)
+            except Exception as ch_err:
+                logger.warning(f"Channel upload notice: {ch_err}")
             
         total_time_spent = round(time.time() - start_time)
         avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
