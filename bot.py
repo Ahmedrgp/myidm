@@ -56,8 +56,15 @@ API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 PORT = int(os.environ.get("PORT", 8080))
 
-MAX_SINGLE_FILE_SIZE = 2000 * 1024 * 1024  # 2,000 MB (~2 GB)
-SPLIT_PART_SIZE = 1950 * 1024 * 1024      # 1.95 GB
+USER_SESSION_STRING = os.environ.get("USER_SESSION_STRING", "") or os.environ.get("PREMIUM_SESSION", "")
+
+if USER_SESSION_STRING:
+    MAX_SINGLE_FILE_SIZE = 4000 * 1024 * 1024  # 4,000 MB (~4 GB Telegram Premium Limit)
+    SPLIT_PART_SIZE = 3950 * 1024 * 1024      # 3.95 GB
+else:
+    MAX_SINGLE_FILE_SIZE = 2000 * 1024 * 1024  # 2,000 MB (~2 GB Bot Limit)
+    SPLIT_PART_SIZE = 1950 * 1024 * 1024      # 1.95 GB
+
 DOWNLOAD_DIR = "/tmp" if os.path.exists("/tmp") else tempfile.gettempdir()
 START_TIME = time.time()
 DB_FILE = "bot_database.db"
@@ -363,7 +370,7 @@ async def start_web_server():
     logger.info(f"🌐 خادم الويب الشغّال (OMNIPOTENT ENGINE) يعمل على المنفذ: {PORT}")
 
 # ==========================================
-# 5. إعداد عميل Pyrogram الفائق (4 Workers)
+# 5. إعداد عميل Pyrogram الفائق (16 Workers & Multi-DC Parallel Transfers)
 # ==========================================
 bot = Client(
     "downloader_bot",
@@ -371,8 +378,26 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     workdir=".",
-    workers=4
+    workers=16,
+    max_concurrent_transfers=10
 )
+
+user_bot = None
+if USER_SESSION_STRING:
+    user_bot = Client(
+        "premium_user_uploader",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=USER_SESSION_STRING,
+        workdir=".",
+        workers=16,
+        max_concurrent_transfers=10
+    )
+
+def get_uploader_client():
+    if user_bot and getattr(user_bot, "is_connected", False):
+        return user_bot
+    return bot
 
 # ==========================================
 # 6. فحص التوقيع الرقمي للبايتات (Binary Magic Bytes Signature Verification)
@@ -1455,7 +1480,9 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
                     with open(part_filepath, "wb") as part_file:
                         part_file.write(chunk_data)
-                    await user_msg.reply_document(
+                    uploader = get_uploader_client()
+                    await uploader.send_document(
+                        chat_id=user_msg.chat.id,
                         document=part_filepath,
                         caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
                         parse_mode=ParseMode.HTML
@@ -1483,11 +1510,12 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             await status_msg.edit_text("🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
             return
 
+        uploader = get_uploader_client()
         force_video = False if settings["upload_mode"] == "doc" else is_video_type
         if force_video:
-            await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            await uploader.send_video(chat_id=user_msg.chat.id, video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
         else:
-            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            await uploader.send_document(chat_id=user_msg.chat.id, document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
             
         total_time_spent = round(time.time() - start_time)
         avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
@@ -1541,6 +1569,17 @@ async def main():
     logger.info("Starting Pyrogram Client with Bilingual OMNIPOTENT OVERLORD ENGINE...")
     await bot.start()
     
+    if user_bot:
+        try:
+            await user_bot.start()
+            user_me = await user_bot.get_me()
+            logger.info("==================================================")
+            logger.info(f"🌟 TELEGRAM PREMIUM USERBOT ACTIVE: @{user_me.username} ({user_me.id})")
+            logger.info(f"🚀 4GB SINGLE FILE UPLOAD & PREMIUM SPEED PRIORITY ENABLED!")
+            logger.info("==================================================")
+        except Exception as u_err:
+            logger.error(f"⚠️ Premium UserBot failed to start: {u_err}")
+
     me = await bot.get_me()
     logger.info("==================================================")
     logger.info(f"⚡ OMNIPOTENT BILINGUAL ENGINE ACTIVATED!")
@@ -1562,6 +1601,8 @@ async def main():
         logger.warning(f"Set commands notice: {e}")
 
     await idle()
+    if user_bot and getattr(user_bot, "is_connected", False):
+        await user_bot.stop()
     await bot.stop()
 
 if __name__ == "__main__":
