@@ -378,8 +378,7 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     workdir=".",
-    workers=16,
-    max_concurrent_transfers=10
+    workers=16
 )
 
 user_bot = None
@@ -390,8 +389,7 @@ if USER_SESSION_STRING:
         api_hash=API_HASH,
         session_string=USER_SESSION_STRING,
         workdir=".",
-        workers=16,
-        max_concurrent_transfers=10
+        workers=16
     )
 
 def get_uploader_client():
