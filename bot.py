@@ -1254,6 +1254,122 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
             except Exception: pass
         gc.collect()
 
+def is_speed_throttled_url(url: str) -> bool:
+    """فحص ما إذا كان الرابط يخضع لسقف سرعة (مثل روابط upfiles مع max=1024k أو غيرها)"""
+    url_lower = url.lower()
+    throttled_params = ["max=", "speed=", "limit=", "rate=", "throttle=", "capped="]
+    if any(param in url_lower for param in throttled_params):
+        return True
+    
+    throttled_domains = [
+        "upfiles.download", "upfiles.com", "uploadhaven.com",
+        "rapidgator.net", "1fichier.com", "filerio.in", "dropgalaxy.in",
+        "katfile.com", "turbobit.net", "nitroflare.com", "pixeldrain.com"
+    ]
+    parsed_netloc = urllib.parse.urlparse(url).netloc.lower()
+    if any(domain in parsed_netloc for domain in throttled_domains):
+        return True
+        
+    return False
+
+async def download_multi_stream_turbo(
+    direct_url: str,
+    file_path: str,
+    total_size: int,
+    headers: dict,
+    status_msg: Message,
+    task_id: str,
+    lang: str,
+    dl_start_time: float,
+    last_update: list,
+    num_connections: int = 32
+) -> bool:
+    """محرك تنزيل متوازي متعدد المسارات (Multi-Stream Turbo 32-64x) لكسر قيود السرعة وسحب الملفات بأقصى سرعة"""
+    if total_size <= 0:
+        return False
+
+    if total_size > 500 * 1024 * 1024:
+        concurrency = min(num_connections, 64)
+    elif total_size > 50 * 1024 * 1024:
+        concurrency = min(num_connections, 32)
+    else:
+        concurrency = 16
+
+    chunk_size = math.ceil(total_size / concurrency)
+    status_tracker = {"downloaded": 0}
+    lock = asyncio.Lock()
+
+    try:
+        with open(file_path, "wb") as f:
+            f.seek(total_size - 1)
+            f.write(b"\0")
+    except Exception as e:
+        logger.warning(f"Pre-allocate failed: {e}")
+        return False
+
+    async def worker_task(worker_id: int, start_byte: int, end_byte: int, session: aiohttp.ClientSession):
+        if start_byte >= total_size:
+            return True
+        actual_end = min(end_byte, total_size - 1)
+        req_headers = {**headers, "Range": f"bytes={start_byte}-{actual_end}"}
+
+        max_retries = 3
+        for retry in range(max_retries):
+            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                return False
+            try:
+                async with session.get(direct_url, headers=req_headers, allow_redirects=True) as resp:
+                    if resp.status not in (200, 206):
+                        if resp.status == 429:
+                            await asyncio.sleep(1.0 + retry)
+                            continue
+                        logger.warning(f"Turbo Worker {worker_id} got status {resp.status}")
+                        return False
+
+                    current_pos = start_byte
+                    async for chunk in resp.content.iter_chunked(256 * 1024):
+                        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                            return False
+                        if chunk:
+                            async with lock:
+                                with open(file_path, "r+b") as f:
+                                    f.seek(current_pos)
+                                    f.write(chunk)
+                            current_pos += len(chunk)
+                            status_tracker["downloaded"] += len(chunk)
+                            await progress_bar(
+                                status_tracker["downloaded"],
+                                total_size,
+                                f"🚀 Turbo ({concurrency}x)",
+                                status_msg,
+                                dl_start_time,
+                                last_update,
+                                icon="⚡",
+                                task_id=task_id,
+                                lang=lang
+                            )
+                    return True
+            except Exception as w_err:
+                logger.warning(f"Turbo Worker {worker_id} retry {retry} error: {w_err}")
+                await asyncio.sleep(0.5)
+        return False
+
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
+    connector = aiohttp.TCPConnector(limit=concurrency + 10, limit_per_host=concurrency + 5)
+    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+        tasks = []
+        for i in range(concurrency):
+            start = i * chunk_size
+            end = start + chunk_size - 1
+            tasks.append(worker_task(i, start, end, session))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if all(r is True for r in results) and os.path.exists(file_path) and os.path.getsize(file_path) == total_size:
+            logger.info(f"✅ Multi-Stream Turbo ({concurrency}x) successfully downloaded {file_path} ({humanbytes(total_size)})!")
+            return True
+
+    return False
+
 async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
     if hop_count >= 2:
         await status_msg.edit_text("❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
@@ -1282,13 +1398,66 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         last_update = [0]
         download_success = False
 
+        # =========================================================================
+        # فحص وتفعيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo) للروابط المقيدة
+        # =========================================================================
+        if is_speed_throttled_url(direct_url):
+            logger.info(f"⚡ Speed-Throttled URL detected: {direct_url} -> Triggering Multi-Stream Turbo Engine...")
+            try:
+                headers = {**STEALTH_HEADERS, "Referer": referer_header}
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as init_session:
+                    async with init_session.get(direct_url, headers=headers, allow_redirects=True) as head_resp:
+                        if head_resp.status in (200, 206):
+                            content_len = head_resp.headers.get("Content-Length")
+                            total_size_turbo = int(content_len) if content_len and content_len.isdigit() else 0
+                            
+                            extracted_filename = smart_extract_filename(direct_url, head_resp.headers)
+                            _, ext = os.path.splitext(extracted_filename)
+                            if custom_name:
+                                filename = f"{custom_name}{ext}" if ext and not custom_name.lower().endswith(ext.lower()) else custom_name
+                            else:
+                                filename = extracted_filename
+
+                            icon, category_desc, is_video_type = get_god_category(filename)
+                            file_path = os.path.join(DOWNLOAD_DIR, filename)
+
+                            if total_size_turbo > 0:
+                                info_card = (
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"🚀 <b>Multi-Stream Turbo Downloader (32-64x):</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"📄 <b>File:</b> <code>{filename}</code>\n"
+                                    f"{icon} <b>Category:</b> {category_desc}\n"
+                                    f"📊 <b>Size:</b> <code>{humanbytes(total_size_turbo)}</code>\n"
+                                    f"⚡ <b>Bypassing Host Speed Caps Active</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                )
+                                await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+
+                                turbo_ok = await download_multi_stream_turbo(
+                                    direct_url=direct_url,
+                                    file_path=file_path,
+                                    total_size=total_size_turbo,
+                                    headers=headers,
+                                    status_msg=status_msg,
+                                    task_id=task_id,
+                                    lang=lang,
+                                    dl_start_time=dl_start_time,
+                                    last_update=last_update,
+                                    num_connections=64
+                                )
+                                if turbo_ok:
+                                    download_success = True
+            except Exception as turbo_err:
+                logger.warning(f"Turbo download fallback triggered: {turbo_err}")
+
         profiles = [
             ("chrome124", referer_header),
             ("chrome120", "https://www.google.com/"),
             ("safari15_5", direct_url)
         ]
 
-        if CURL_CFFI_AVAILABLE:
+        if not download_success and CURL_CFFI_AVAILABLE:
             for target_prof, target_ref in profiles:
                 if download_success or ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                     break
