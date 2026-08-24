@@ -6,3 +6,4 @@ brotli
 torrentp
 python-dotenv
 curl-cffi
+yt-dlp

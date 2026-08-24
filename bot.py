@@ -28,6 +28,11 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, 
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, MessageNotModified
 
+import pyrogram.utils
+# Fix 64-bit Telegram Channel IDs in Pyrogram (-100...)
+pyrogram.utils.MIN_CHANNEL_ID = -10099999999999
+pyrogram.utils.MAX_CHANNEL_ID = -1000000000000
+
 try:
     from curl_cffi.requests import AsyncSession as CurlAsyncSession
     CURL_CFFI_AVAILABLE = True
@@ -39,6 +44,12 @@ try:
     TORRENTP_AVAILABLE = True
 except ImportError:
     TORRENTP_AVAILABLE = False
+
+try:
+    import yt_dlp
+    YTDLP_AVAILABLE = True
+except ImportError:
+    YTDLP_AVAILABLE = False
 
 load_dotenv()
 
@@ -1368,7 +1379,99 @@ async def download_multi_stream_turbo(
             logger.info(f"✅ Multi-Stream Turbo ({concurrency}x) successfully downloaded {file_path} ({humanbytes(total_size)})!")
             return True
 
-    return False
+def is_hls_or_video_stream(url: str) -> bool:
+    """فحص ما إذا كان الرابط هو رابط بث مباشر m3u8 أو مشغل فيديو ويب"""
+    url_lower = url.lower()
+    if ".m3u8" in url_lower or ".mpd" in url_lower:
+        return True
+    
+    video_hosts = [
+        "hgcloud.to", "hglink.to", "dood.", "doodstream", "vidtube",
+        "streamtape", "mixdrop", "mp4upload", "vidoza", "streamwish",
+        "filelions", "dropload", "streamvid", "minochinos.com",
+        "youtube.com", "youtu.be", "twitter.com", "x.com", "tiktok.com",
+        "facebook.com", "fb.watch", "instagram.com"
+    ]
+    parsed_netloc = urllib.parse.urlparse(url).netloc.lower()
+    return any(host in parsed_netloc for host in video_hosts)
+
+async def download_video_or_m3u8(
+    video_url: str,
+    output_dir: str,
+    custom_name: str,
+    referer_header: str,
+    status_msg: Message,
+    task_id: str,
+    lang: str,
+    dl_start_time: float,
+    last_update: list
+) -> tuple:
+    """تحميل روابط البث m3u8 ومشغلات الفيديو المضمنة وتحويلها إلى MP4 1080p عالية الجودة"""
+    if not YTDLP_AVAILABLE:
+        logger.warning("yt-dlp is not installed!")
+        return False, None, None
+
+    loop = asyncio.get_running_loop()
+
+    if custom_name:
+        out_template = os.path.join(output_dir, f"{custom_name}.%(ext)s")
+    else:
+        out_template = os.path.join(output_dir, "%(title).100s.%(ext)s")
+
+    def ytdl_progress_hook(d):
+        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            raise Exception("Download cancelled by user")
+        if d.get("status") == "downloading":
+            downloaded = d.get("downloaded_bytes") or 0
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            asyncio.run_coroutine_threadsafe(
+                progress_bar(
+                    downloaded, total, tr(lang, "downloading"),
+                    status_msg, dl_start_time, last_update,
+                    icon="🎬", task_id=task_id, lang=lang
+                ),
+                loop
+            )
+
+    parsed_netloc = urllib.parse.urlparse(video_url).netloc
+    origin_header = f"{urllib.parse.urlparse(video_url).scheme}://{parsed_netloc}"
+    ref = referer_header if referer_header else origin_header
+
+    ydl_opts = {
+        'outtmpl': out_template,
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
+        'http_headers': {
+            'User-Agent': STEALTH_HEADERS['User-Agent'],
+            'Referer': ref,
+            'Origin': origin_header
+        },
+        'progress_hooks': [ytdl_progress_hook],
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+    }
+
+    def run_ydl():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            filename = ydl.prepare_filename(info)
+            base_name, _ = os.path.splitext(filename)
+            mp4_name = f"{base_name}.mp4"
+            if os.path.exists(mp4_name):
+                return mp4_name, info.get("title", "Video")
+            if os.path.exists(filename):
+                return filename, info.get("title", "Video")
+            return None, None
+
+    try:
+        final_path, title = await loop.run_in_executor(None, run_ydl)
+        if final_path and os.path.exists(final_path):
+            return True, final_path, os.path.basename(final_path)
+    except Exception as e:
+        logger.warning(f"yt-dlp download failed: {e}")
+        
+    return False, None, None
 
 async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
     if hop_count >= 2:
@@ -1399,9 +1502,41 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         download_success = False
 
         # =========================================================================
-        # فحص وتفعيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo) للروابط المقيدة
+        # 1. فحص وتنزيل روابط البث ومشغلات الفيديو المضمنة (m3u8 & Web Video Streams)
         # =========================================================================
-        if is_speed_throttled_url(direct_url):
+        if is_hls_or_video_stream(direct_url) or is_hls_or_video_stream(raw_url):
+            target_stream_url = direct_url if is_hls_or_video_stream(direct_url) else raw_url
+            logger.info(f"🎬 HLS / Video Stream detected: {target_stream_url}")
+            await status_msg.edit_text(
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎬 <b>OMNIPOTENT HLS & Video Stream Engine:</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚡ <b>Extracting Stream & Converting to MP4 1080p...</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                parse_mode=ParseMode.HTML
+            )
+            v_ok, v_path, v_name = await download_video_or_m3u8(
+                video_url=target_stream_url,
+                output_dir=DOWNLOAD_DIR,
+                custom_name=custom_name,
+                referer_header=referer_header,
+                status_msg=status_msg,
+                task_id=task_id,
+                lang=lang,
+                dl_start_time=dl_start_time,
+                last_update=last_update
+            )
+            if v_ok and v_path and os.path.exists(v_path):
+                file_path = v_path
+                filename = v_name
+                icon, category_desc, is_video_type = get_god_category(filename)
+                is_video_type = True
+                download_success = True
+
+        # =========================================================================
+        # 2. فحص وتفعيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo) للروابط المقيدة
+        # =========================================================================
+        if not download_success and is_speed_throttled_url(direct_url):
             logger.info(f"⚡ Speed-Throttled URL detected: {direct_url} -> Triggering Multi-Stream Turbo Engine...")
             try:
                 headers = {**STEALTH_HEADERS, "Referer": referer_header}
