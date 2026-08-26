@@ -1534,17 +1534,16 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 download_success = True
 
         # =========================================================================
-        # 2. فحص وتفعيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo) للروابط المقيدة
+        # 2. تشغيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo 32-64x) لجميع الملفات الضخمة
         # =========================================================================
-        if not download_success and is_speed_throttled_url(direct_url):
-            logger.info(f"⚡ Speed-Throttled URL detected: {direct_url} -> Triggering Multi-Stream Turbo Engine...")
+        if not download_success:
             try:
                 headers = {**STEALTH_HEADERS, "Referer": referer_header}
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as init_session:
                     async with init_session.get(direct_url, headers=headers, allow_redirects=True) as head_resp:
                         if head_resp.status in (200, 206):
                             content_len = head_resp.headers.get("Content-Length")
-                            total_size_turbo = int(content_len) if content_len and content_len.isdigit() else 0
+                            total_size_probe = int(content_len) if content_len and content_len.isdigit() else 0
                             
                             extracted_filename = smart_extract_filename(direct_url, head_resp.headers)
                             _, ext = os.path.splitext(extracted_filename)
@@ -1556,15 +1555,17 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             icon, category_desc, is_video_type = get_god_category(filename)
                             file_path = os.path.join(DOWNLOAD_DIR, filename)
 
-                            if total_size_turbo > 0:
+                            # تشغيل الـ Turbo لجميع الملفات أكبر من 20MB أو الروابط المقيدة لتفجير السرعة
+                            if total_size_probe >= 20 * 1024 * 1024 or is_speed_throttled_url(direct_url):
+                                logger.info(f"⚡ Launching Multi-Stream Turbo Downloader for {direct_url} (Size: {humanbytes(total_size_probe)})...")
                                 info_card = (
                                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                                     f"🚀 <b>Multi-Stream Turbo Downloader (32-64x):</b>\n"
                                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                                     f"📄 <b>File:</b> <code>{filename}</code>\n"
                                     f"{icon} <b>Category:</b> {category_desc}\n"
-                                    f"📊 <b>Size:</b> <code>{humanbytes(total_size_turbo)}</code>\n"
-                                    f"⚡ <b>Bypassing Host Speed Caps Active</b>\n"
+                                    f"📊 <b>Size:</b> <code>{humanbytes(total_size_probe)}</code>\n"
+                                    f"⚡ <b>Max Speed Acceleration Active (64 Streams)</b>\n"
                                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                                 )
                                 await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
@@ -1572,7 +1573,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 turbo_ok = await download_multi_stream_turbo(
                                     direct_url=direct_url,
                                     file_path=file_path,
-                                    total_size=total_size_turbo,
+                                    total_size=total_size_probe,
                                     headers=headers,
                                     status_msg=status_msg,
                                     task_id=task_id,
@@ -1584,7 +1585,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 if turbo_ok:
                                     download_success = True
             except Exception as turbo_err:
-                logger.warning(f"Turbo download fallback triggered: {turbo_err}")
+                logger.warning(f"Turbo download probe/fallback: {turbo_err}")
 
         profiles = [
             ("chrome124", referer_header),
