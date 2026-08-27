@@ -1397,6 +1397,8 @@ def is_hls_or_video_stream(url: str) -> bool:
 
 async def download_video_or_m3u8(
     video_url: str,
+async def download_video_or_m3u8(
+    video_url: str,
     output_dir: str,
     custom_name: str,
     referer_header: str,
@@ -1418,59 +1420,85 @@ async def download_video_or_m3u8(
     else:
         out_template = os.path.join(output_dir, "%(title).100s.%(ext)s")
 
-    def ytdl_progress_hook(d):
-        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-            raise Exception("Download cancelled by user")
-        if d.get("status") == "downloading":
-            downloaded = d.get("downloaded_bytes") or 0
-            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-            asyncio.run_coroutine_threadsafe(
-                progress_bar(
-                    downloaded, total, tr(lang, "downloading"),
-                    status_msg, dl_start_time, last_update,
-                    icon="🎬", task_id=task_id, lang=lang
-                ),
-                loop
-            )
-
     parsed_netloc = urllib.parse.urlparse(video_url).netloc
+    parts = parsed_netloc.split(".")
+    base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed_netloc
     origin_header = f"{urllib.parse.urlparse(video_url).scheme}://{parsed_netloc}"
-    ref = referer_header if referer_header else origin_header
 
-    ydl_opts = {
-        'outtmpl': out_template,
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
-        'http_headers': {
+    candidate_referers = [
+        referer_header if referer_header else origin_header,
+        f"https://{base_domain}/",
+        f"https://{parsed_netloc}/",
+        "https://cima4u.skin/",
+        "https://wecima.cam/",
+        None
+    ]
+
+    for current_ref in candidate_referers:
+        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            return False, None, None
+
+        status_tracker = {"downloaded": 0, "total": 0}
+
+        def ytdl_progress_hook(d):
+            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                raise Exception("Download cancelled by user")
+            if d.get("status") == "downloading":
+                downloaded = d.get("downloaded_bytes") or 0
+                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                status_tracker["downloaded"] = downloaded
+                status_tracker["total"] = total
+                asyncio.run_coroutine_threadsafe(
+                    progress_bar(
+                        downloaded, total, tr(lang, "downloading"),
+                        status_msg, dl_start_time, last_update,
+                        icon="🎬", task_id=task_id, lang=lang
+                    ),
+                    loop
+                )
+
+        headers = {
             'User-Agent': STEALTH_HEADERS['User-Agent'],
-            'Referer': ref,
             'Origin': origin_header
-        },
-        'progress_hooks': [ytdl_progress_hook],
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-    }
+        }
+        if current_ref:
+            headers['Referer'] = current_ref
 
-    def run_ydl():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            filename = ydl.prepare_filename(info)
-            base_name, _ = os.path.splitext(filename)
-            mp4_name = f"{base_name}.mp4"
-            if os.path.exists(mp4_name):
-                return mp4_name, info.get("title", "Video")
-            if os.path.exists(filename):
-                return filename, info.get("title", "Video")
-            return None, None
+        ydl_opts = {
+            'outtmpl': out_template,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'merge_output_format': 'mp4',
+            'http_headers': headers,
+            'progress_hooks': [ytdl_progress_hook],
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'retries': 5,
+            'fragment_retries': 10,
+            'skip_unavailable_fragments': True,
+            'concurrent_fragment_downloads': 8,
+        }
 
-    try:
-        final_path, title = await loop.run_in_executor(None, run_ydl)
-        if final_path and os.path.exists(final_path):
-            return True, final_path, os.path.basename(final_path)
-    except Exception as e:
-        logger.warning(f"yt-dlp download failed: {e}")
-        
+        def run_ydl():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                filename = ydl.prepare_filename(info)
+                base_name, _ = os.path.splitext(filename)
+                mp4_name = f"{base_name}.mp4"
+                if os.path.exists(mp4_name):
+                    return mp4_name, info.get("title", "Video")
+                if os.path.exists(filename):
+                    return filename, info.get("title", "Video")
+                return None, None
+
+        try:
+            final_path, title = await loop.run_in_executor(None, run_ydl)
+            if final_path and os.path.exists(final_path):
+                return True, final_path, os.path.basename(final_path)
+        except Exception as e:
+            logger.warning(f"yt-dlp try with ref [{current_ref}] failed: {e}")
+            await asyncio.sleep(0.5)
+
     return False, None, None
 
 async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
