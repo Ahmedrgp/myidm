@@ -1282,7 +1282,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
         gc.collect()
 
 def is_speed_throttled_url(url: str) -> bool:
-    """فحص ما إذا كان الرابط يخضع لسقف سرعة (مثل روابط upfiles مع max=1024k أو غيرها)"""
+    """فحص ما إذا كان الرابط يخضع لسقف سرعة محدد من السيرفر (أقل من 1 ميجابايت)"""
     url_lower = url.lower()
     throttled_params = ["max=", "speed=", "limit=", "rate=", "throttle=", "capped="]
     if any(param in url_lower for param in throttled_params):
@@ -1291,7 +1291,8 @@ def is_speed_throttled_url(url: str) -> bool:
     throttled_domains = [
         "upfiles.download", "upfiles.com", "uploadhaven.com",
         "rapidgator.net", "1fichier.com", "filerio.in", "dropgalaxy.in",
-        "katfile.com", "turbobit.net", "nitroflare.com", "pixeldrain.com"
+        "katfile.com", "turbobit.net", "nitroflare.com", "pixeldrain.com",
+        "downet.net", "akwam"
     ]
     parsed_netloc = urllib.parse.urlparse(url).netloc.lower()
     if any(domain in parsed_netloc for domain in throttled_domains):
@@ -1643,9 +1644,9 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 download_success = True
 
         # =========================================================================
-        # 2. تشغيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo 32-64x) لجميع الملفات الضخمة
+        # 2. تشغيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo) للروابط المقيدة فقط (<1MB/s)
         # =========================================================================
-        if not download_success:
+        if not download_success and is_speed_throttled_url(direct_url):
             try:
                 headers = {**STEALTH_HEADERS, "Referer": referer_header}
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as init_session:
@@ -1664,35 +1665,33 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             icon, category_desc, is_video_type = get_god_category(filename)
                             file_path = os.path.join(DOWNLOAD_DIR, filename)
 
-                            # تشغيل الـ Turbo لجميع الملفات أكبر من 20MB أو الروابط المقيدة لتفجير السرعة
-                            if total_size_probe >= 20 * 1024 * 1024 or is_speed_throttled_url(direct_url):
-                                logger.info(f"⚡ Launching Multi-Stream Turbo Downloader for {direct_url} (Size: {humanbytes(total_size_probe)})...")
-                                info_card = (
-                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"🚀 <b>Multi-Stream Turbo Downloader (32-64x):</b>\n"
-                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"📄 <b>File:</b> <code>{filename}</code>\n"
-                                    f"{icon} <b>Category:</b> {category_desc}\n"
-                                    f"📊 <b>Size:</b> <code>{humanbytes(total_size_probe)}</code>\n"
-                                    f"⚡ <b>Max Speed Acceleration Active (64 Streams)</b>\n"
-                                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                                )
-                                await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+                            logger.info(f"⚡ Launching Multi-Stream Turbo Downloader for throttled link: {direct_url} (Size: {humanbytes(total_size_probe)})...")
+                            info_card = (
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"🚀 <b>Multi-Stream Turbo Downloader (32x):</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"📄 <b>File:</b> <code>{filename}</code>\n"
+                                f"{icon} <b>Category:</b> {category_desc}\n"
+                                f"📊 <b>Size:</b> <code>{humanbytes(total_size_probe)}</code>\n"
+                                f"⚡ <b>Bypassing Host Speed Cap Active</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            )
+                            await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
-                                turbo_ok = await download_multi_stream_turbo(
-                                    direct_url=direct_url,
-                                    file_path=file_path,
-                                    total_size=total_size_probe,
-                                    headers=headers,
-                                    status_msg=status_msg,
-                                    task_id=task_id,
-                                    lang=lang,
-                                    dl_start_time=dl_start_time,
-                                    last_update=last_update,
-                                    num_connections=64
-                                )
-                                if turbo_ok:
-                                    download_success = True
+                            turbo_ok = await download_multi_stream_turbo(
+                                direct_url=direct_url,
+                                file_path=file_path,
+                                total_size=total_size_probe,
+                                headers=headers,
+                                status_msg=status_msg,
+                                task_id=task_id,
+                                lang=lang,
+                                dl_start_time=dl_start_time,
+                                last_update=last_update,
+                                num_connections=32
+                            )
+                            if turbo_ok:
+                                download_success = True
             except Exception as turbo_err:
                 logger.warning(f"Turbo download probe/fallback: {turbo_err}")
 
@@ -1769,6 +1768,16 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                         f.write(chunk)
                                         status_tracker["downloaded"] += len(chunk)
                                         last_chunk_time = time.time()
+                                        
+                                        # فحص ديناميكي: إذا كانت سرعة السيرفر بطيئة ومقيدة (<1MB/s) بعد 5 ثوانٍ، تشغيل التيربو فوراً
+                                        elapsed = time.time() - dl_start_time
+                                        if elapsed > 5.0 and total_size > 15 * 1024 * 1024 and status_tracker["downloaded"] > 0:
+                                            current_rate = status_tracker["downloaded"] / elapsed
+                                            if current_rate < 1.0 * 1024 * 1024 and not is_speed_throttled_url(direct_url):
+                                                logger.info(f"⚡ Host throttled at {humanbytes(current_rate)}/s (<1MB/s) -> Auto-switching to Multi-Stream Turbo!")
+                                                stalled = True
+                                                break
+                                                
                                         await progress_bar(
                                             status_tracker["downloaded"],
                                             total_size,
