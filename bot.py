@@ -682,14 +682,30 @@ def make_cancel_keyboard(task_id: str, lang: str = "ar"):
 
 async def progress_bar(current: int, total: int, status_text: str, message: Message, start_time: float, last_update: list, icon: str = "🌌", task_id: str = None, lang: str = "ar"):
     now = time.time()
-    diff = now - start_time
     
-    if current != total and (now - last_update[0]) < 3.0:
+    while len(last_update) < 3:
+        last_update.append(0)
+        
+    last_time = last_update[0]
+    last_bytes = last_update[1]
+    
+    if current != total and last_time > 0 and (now - last_time) < 2.5:
         return
 
+    time_delta = now - last_time if last_time > 0 else (now - start_time)
+    bytes_delta = current - last_bytes if last_bytes > 0 else current
+
+    instant_speed = bytes_delta / time_delta if time_delta > 0 else 0
+    if instant_speed <= 0:
+        overall_diff = now - start_time
+        instant_speed = current / overall_diff if overall_diff > 0 else 0
+
     last_update[0] = now
+    last_update[1] = current
+    last_update[2] = instant_speed
+
+    speed = instant_speed
     percentage = (current * 100 / total) if total else 0
-    speed = current / diff if diff > 0 else 0
     time_to_completion = round((total - current) / speed) if (total and speed > 0) else 0
     
     filled_blocks = math.floor(percentage / 10) if total else 5
@@ -1295,18 +1311,27 @@ async def download_multi_stream_turbo(
     last_update: list,
     num_connections: int = 32
 ) -> bool:
-    """محرك تنزيل متوازي متعدد المسارات (Multi-Stream Turbo 32-64x) لكسر قيود السرعة وسحب الملفات بأقصى سرعة"""
+    """محرك تنزيل ديناميكي متوازي فائق (Dynamic Work-Stealing Pool 32-48x) يمنع بطء النهاية ويسحب الملفات بأقصى سرعة حتى 100%"""
     if total_size <= 0:
         return False
 
     if total_size > 500 * 1024 * 1024:
-        concurrency = min(num_connections, 64)
+        concurrency = min(num_connections, 48)
+        block_size = 2 * 1024 * 1024
     elif total_size > 50 * 1024 * 1024:
         concurrency = min(num_connections, 32)
+        block_size = 1 * 1024 * 1024
     else:
         concurrency = 16
+        block_size = 512 * 1024
 
-    chunk_size = math.ceil(total_size / concurrency)
+    block_queue = asyncio.Queue()
+    current_byte = 0
+    while current_byte < total_size:
+        end_byte = min(current_byte + block_size - 1, total_size - 1)
+        block_queue.put_nowait((current_byte, end_byte))
+        current_byte = end_byte + 1
+
     status_tracker = {"downloaded": 0}
     lock = asyncio.Lock()
 
@@ -1318,66 +1343,74 @@ async def download_multi_stream_turbo(
         logger.warning(f"Pre-allocate failed: {e}")
         return False
 
-    async def worker_task(worker_id: int, start_byte: int, end_byte: int, session: aiohttp.ClientSession):
-        if start_byte >= total_size:
-            return True
-        actual_end = min(end_byte, total_size - 1)
-        req_headers = {**headers, "Range": f"bytes={start_byte}-{actual_end}"}
-
-        max_retries = 3
-        for retry in range(max_retries):
+    async def worker_loop(worker_id: int, session: aiohttp.ClientSession):
+        while not block_queue.empty():
             if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 return False
+
             try:
-                async with session.get(direct_url, headers=req_headers, allow_redirects=True) as resp:
-                    if resp.status not in (200, 206):
-                        if resp.status == 429:
-                            await asyncio.sleep(1.0 + retry)
-                            continue
-                        logger.warning(f"Turbo Worker {worker_id} got status {resp.status}")
-                        return False
+                start_byte, end_byte = block_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
-                    current_pos = start_byte
-                    async for chunk in resp.content.iter_chunked(256 * 1024):
-                        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                            return False
-                        if chunk:
-                            async with lock:
-                                with open(file_path, "r+b") as f:
-                                    f.seek(current_pos)
-                                    f.write(chunk)
-                            current_pos += len(chunk)
-                            status_tracker["downloaded"] += len(chunk)
-                            await progress_bar(
-                                status_tracker["downloaded"],
-                                total_size,
-                                f"🚀 Turbo ({concurrency}x)",
-                                status_msg,
-                                dl_start_time,
-                                last_update,
-                                icon="⚡",
-                                task_id=task_id,
-                                lang=lang
-                            )
-                    return True
-            except Exception as w_err:
-                logger.warning(f"Turbo Worker {worker_id} retry {retry} error: {w_err}")
-                await asyncio.sleep(0.5)
-        return False
+            req_headers = {**headers, "Range": f"bytes={start_byte}-{end_byte}"}
+            success = False
+            expected_len = end_byte - start_byte + 1
 
-    timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
+            for retry in range(3):
+                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                    block_queue.task_done()
+                    return False
+                try:
+                    block_timeout = aiohttp.ClientTimeout(total=12, sock_connect=5, sock_read=8)
+                    async with session.get(direct_url, headers=req_headers, timeout=block_timeout, allow_redirects=True) as resp:
+                        if resp.status == 206:
+                            block_data = await resp.read()
+                            if len(block_data) == expected_len:
+                                async with lock:
+                                    with open(file_path, "r+b") as f:
+                                        f.seek(start_byte)
+                                        f.write(block_data)
+                                status_tracker["downloaded"] += len(block_data)
+                                await progress_bar(
+                                    status_tracker["downloaded"],
+                                    total_size,
+                                    f"🚀 Turbo ({concurrency}x)",
+                                    status_msg,
+                                    dl_start_time,
+                                    last_update,
+                                    icon="⚡",
+                                    task_id=task_id,
+                                    lang=lang
+                                )
+                                success = True
+                                break
+                        elif resp.status == 429:
+                            await asyncio.sleep(0.5 + retry * 0.5)
+                except Exception:
+                    await asyncio.sleep(0.3)
+
+            block_queue.task_done()
+            if not success:
+                await block_queue.put((start_byte, end_byte))
+                await asyncio.sleep(0.2)
+
+        return True
+
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)
     connector = aiohttp.TCPConnector(limit=concurrency + 10, limit_per_host=concurrency + 5)
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-        tasks = []
-        for i in range(concurrency):
-            start = i * chunk_size
-            end = start + chunk_size - 1
-            tasks.append(worker_task(i, start, end, session))
+        workers = [asyncio.create_task(worker_loop(i, session)) for i in range(concurrency)]
+        await block_queue.join()
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        if all(r is True for r in results) and os.path.exists(file_path) and os.path.getsize(file_path) == total_size:
-            logger.info(f"✅ Multi-Stream Turbo ({concurrency}x) successfully downloaded {file_path} ({humanbytes(total_size)})!")
+        if os.path.exists(file_path) and os.path.getsize(file_path) == total_size:
+            logger.info(f"✅ Dynamic Work-Stealing Turbo ({concurrency}x) successfully downloaded {file_path} ({humanbytes(total_size)})!")
             return True
+
+    return False
 
 def is_hls_or_video_stream(url: str) -> bool:
     """فحص ما إذا كان الرابط هو رابط بث مباشر m3u8 أو مشغل فيديو ويب"""
