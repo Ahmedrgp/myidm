@@ -1489,7 +1489,7 @@ async def download_video_or_m3u8(
     dl_start_time: float,
     last_update: list
 ) -> tuple:
-    """تحميل روابط البث m3u8 ومشغلات الفيديو المضمنة وتحويلها إلى MP4 1080p عالية الجودة"""
+    """تحميل روابط البث m3u8 ومشغلات الفيديو المضمنة ومواقع التواصل (Instagram/TikTok/YouTube) بأعلى جودة"""
     if not YTDLP_AVAILABLE:
         logger.warning("yt-dlp is not installed!")
         return False, None, None
@@ -1501,19 +1501,23 @@ async def download_video_or_m3u8(
     else:
         out_template = os.path.join(output_dir, "%(title).100s.%(ext)s")
 
-    parsed_netloc = urllib.parse.urlparse(video_url).netloc
-    parts = parsed_netloc.split(".")
-    base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed_netloc
-    origin_header = f"{urllib.parse.urlparse(video_url).scheme}://{parsed_netloc}"
+    parsed_netloc = urllib.parse.urlparse(video_url).netloc.lower()
+    is_social = any(s in parsed_netloc for s in ["instagram.com", "tiktok.com", "youtube.com", "youtu.be", "twitter.com", "x.com", "facebook.com", "fb.watch"])
 
-    candidate_referers = [
-        referer_header if referer_header else origin_header,
-        f"https://{base_domain}/",
-        f"https://{parsed_netloc}/",
-        "https://cima4u.skin/",
-        "https://wecima.cam/",
-        None
-    ]
+    if is_social:
+        candidate_referers = [None]
+    else:
+        parts = parsed_netloc.split(".")
+        base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed_netloc
+        origin_header = f"{urllib.parse.urlparse(video_url).scheme}://{parsed_netloc}"
+        candidate_referers = [
+            referer_header if referer_header else origin_header,
+            f"https://{base_domain}/",
+            f"https://{parsed_netloc}/",
+            "https://cima4u.skin/",
+            "https://wecima.cam/",
+            None
+        ]
 
     for current_ref in candidate_referers:
         if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
@@ -1538,18 +1542,10 @@ async def download_video_or_m3u8(
                     loop
                 )
 
-        headers = {
-            'User-Agent': STEALTH_HEADERS['User-Agent'],
-            'Origin': origin_header
-        }
-        if current_ref:
-            headers['Referer'] = current_ref
-
         ydl_opts = {
             'outtmpl': out_template,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',
             'merge_output_format': 'mp4',
-            'http_headers': headers,
             'progress_hooks': [ytdl_progress_hook],
             'quiet': True,
             'no_warnings': True,
@@ -1559,6 +1555,13 @@ async def download_video_or_m3u8(
             'skip_unavailable_fragments': True,
             'concurrent_fragment_downloads': 8,
         }
+
+        if current_ref and not is_social:
+            ydl_opts['http_headers'] = {
+                'User-Agent': STEALTH_HEADERS['User-Agent'],
+                'Referer': current_ref,
+                'Origin': f"{urllib.parse.urlparse(video_url).scheme}://{parsed_netloc}"
+            }
 
         def run_ydl():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -2007,11 +2010,23 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
         force_video = False if settings["upload_mode"] == "doc" else is_video_type
         
-        # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت (ضمان كامل لظهور الملف)
-        if force_video:
-            await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
-        else:
-            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+        # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت مع إعادة المحاولة التلقائية عند انقطاع الاتصال
+        max_up_retries = 3
+        for up_try in range(max_up_retries):
+            try:
+                if force_video:
+                    await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+                else:
+                    await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+                break
+            except FloodWait as fw:
+                logger.warning(f"FloodWait during upload: {fw.value}s - Waiting...")
+                await asyncio.sleep(fw.value + 1)
+            except Exception as up_err:
+                logger.warning(f"Upload try {up_try+1} failed: {up_err}")
+                if up_try == max_up_retries - 1:
+                    raise up_err
+                await asyncio.sleep(2)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
