@@ -1311,28 +1311,35 @@ async def download_multi_stream_turbo(
     last_update: list,
     num_connections: int = 32
 ) -> bool:
-    """محرك تنزيل ديناميكي متوازي فائق (Dynamic Work-Stealing Pool 32-48x) يمنع بطء النهاية ويسحب الملفات بأقصى سرعة حتى 100%"""
+    """محرك تنزيل ديناميكي فائق مع تسريع نهاية التحميل (Dynamic Micro-Blocks & End-Game Hedging) لمنع أي تباطؤ عند 99%"""
     if total_size <= 0:
         return False
 
+    # كتل صغيرة جداً (256KB - 512KB) لمنع أي تعليق في آخر 1%
     if total_size > 500 * 1024 * 1024:
         concurrency = min(num_connections, 48)
-        block_size = 2 * 1024 * 1024
-    elif total_size > 50 * 1024 * 1024:
-        concurrency = min(num_connections, 32)
-        block_size = 1 * 1024 * 1024
-    else:
-        concurrency = 16
         block_size = 512 * 1024
+    else:
+        concurrency = min(num_connections, 32)
+        block_size = 256 * 1024
 
-    block_queue = asyncio.Queue()
+    blocks = []
     current_byte = 0
+    b_id = 0
     while current_byte < total_size:
         end_byte = min(current_byte + block_size - 1, total_size - 1)
-        block_queue.put_nowait((current_byte, end_byte))
+        blocks.append((b_id, current_byte, end_byte))
+        b_id += 1
         current_byte = end_byte + 1
 
+    total_blocks_count = len(blocks)
+    block_queue = asyncio.Queue()
+    for b in blocks:
+        block_queue.put_nowait(b)
+
     status_tracker = {"downloaded": 0}
+    completed_blocks = set()
+    in_flight = {}
     lock = asyncio.Lock()
 
     try:
@@ -1343,72 +1350,115 @@ async def download_multi_stream_turbo(
         logger.warning(f"Pre-allocate failed: {e}")
         return False
 
+    try:
+        file_handle = open(file_path, "r+b")
+    except Exception as e:
+        logger.warning(f"Failed to open file handle: {e}")
+        return False
+
+    async def fetch_block(b_id: int, start_byte: int, end_byte: int, session: aiohttp.ClientSession):
+        if b_id in completed_blocks or ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            return False
+        
+        req_headers = {**headers, "Range": f"bytes={start_byte}-{end_byte}"}
+        expected_len = end_byte - start_byte + 1
+        
+        try:
+            b_timeout = aiohttp.ClientTimeout(total=8, sock_connect=4, sock_read=6)
+            async with session.get(direct_url, headers=req_headers, timeout=b_timeout, allow_redirects=True) as resp:
+                if resp.status == 206:
+                    block_data = await resp.read()
+                    if len(block_data) == expected_len and b_id not in completed_blocks:
+                        async with lock:
+                            if b_id not in completed_blocks:
+                                file_handle.seek(start_byte)
+                                file_handle.write(block_data)
+                                completed_blocks.add(b_id)
+                                in_flight.pop(b_id, None)
+                                status_tracker["downloaded"] += len(block_data)
+                                
+                        await progress_bar(
+                            status_tracker["downloaded"],
+                            total_size,
+                            f"🚀 Turbo ({concurrency}x)",
+                            status_msg,
+                            dl_start_time,
+                            last_update,
+                            icon="⚡",
+                            task_id=task_id,
+                            lang=lang
+                        )
+                        return True
+                elif resp.status == 429:
+                    await asyncio.sleep(0.5)
+        except Exception:
+            pass
+        return False
+
     async def worker_loop(worker_id: int, session: aiohttp.ClientSession):
-        while not block_queue.empty():
+        while len(completed_blocks) < total_blocks_count:
             if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 return False
 
+            b_id = -1
+            start_byte = 0
+            end_byte = 0
+
             try:
-                start_byte, end_byte = block_queue.get_nowait()
+                b_id, start_byte, end_byte = block_queue.get_nowait()
             except asyncio.QueueEmpty:
-                break
+                candidate = None
+                now = time.time()
+                for pending_id, (p_start, p_end, p_time) in list(in_flight.items()):
+                    if pending_id not in completed_blocks:
+                        if candidate is None or p_time < candidate[3]:
+                            candidate = (pending_id, p_start, p_end, p_time)
 
-            req_headers = {**headers, "Range": f"bytes={start_byte}-{end_byte}"}
-            success = False
-            expected_len = end_byte - start_byte + 1
+                if candidate:
+                    b_id, start_byte, end_byte, _ = candidate
+                else:
+                    await asyncio.sleep(0.05)
+                    continue
 
-            for retry in range(3):
-                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                    block_queue.task_done()
-                    return False
-                try:
-                    block_timeout = aiohttp.ClientTimeout(total=12, sock_connect=5, sock_read=8)
-                    async with session.get(direct_url, headers=req_headers, timeout=block_timeout, allow_redirects=True) as resp:
-                        if resp.status == 206:
-                            block_data = await resp.read()
-                            if len(block_data) == expected_len:
-                                async with lock:
-                                    with open(file_path, "r+b") as f:
-                                        f.seek(start_byte)
-                                        f.write(block_data)
-                                status_tracker["downloaded"] += len(block_data)
-                                await progress_bar(
-                                    status_tracker["downloaded"],
-                                    total_size,
-                                    f"🚀 Turbo ({concurrency}x)",
-                                    status_msg,
-                                    dl_start_time,
-                                    last_update,
-                                    icon="⚡",
-                                    task_id=task_id,
-                                    lang=lang
-                                )
-                                success = True
-                                break
-                        elif resp.status == 429:
-                            await asyncio.sleep(0.5 + retry * 0.5)
-                except Exception:
-                    await asyncio.sleep(0.3)
+            if b_id in completed_blocks:
+                continue
 
-            block_queue.task_done()
-            if not success:
-                await block_queue.put((start_byte, end_byte))
-                await asyncio.sleep(0.2)
+            in_flight[b_id] = (start_byte, end_byte, time.time())
+            success = await fetch_block(b_id, start_byte, end_byte, session)
+
+            if not success and b_id not in completed_blocks:
+                await block_queue.put((b_id, start_byte, end_byte))
+                await asyncio.sleep(0.1)
 
         return True
 
-    timeout = aiohttp.ClientTimeout(total=None, sock_connect=20, sock_read=30)
-    connector = aiohttp.TCPConnector(limit=concurrency + 10, limit_per_host=concurrency + 5)
-    async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-        workers = [asyncio.create_task(worker_loop(i, session)) for i in range(concurrency)]
-        await block_queue.join()
-        for w in workers:
-            w.cancel()
-        await asyncio.gather(*workers, return_exceptions=True)
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=20)
+    connector = aiohttp.TCPConnector(limit=concurrency + 20, limit_per_host=concurrency + 10, keepalive_timeout=30)
+    
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            workers = [asyncio.create_task(worker_loop(i, session)) for i in range(concurrency)]
+            
+            while len(completed_blocks) < total_blocks_count:
+                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                    for w in workers:
+                        w.cancel()
+                    return False
+                await asyncio.sleep(0.1)
 
-        if os.path.exists(file_path) and os.path.getsize(file_path) == total_size:
-            logger.info(f"✅ Dynamic Work-Stealing Turbo ({concurrency}x) successfully downloaded {file_path} ({humanbytes(total_size)})!")
-            return True
+            for w in workers:
+                w.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+    finally:
+        try:
+            file_handle.flush()
+            file_handle.close()
+        except Exception:
+            pass
+
+    if os.path.exists(file_path) and os.path.getsize(file_path) == total_size:
+        logger.info(f"✅ Turbo with End-Game Hedging finished {file_path} ({humanbytes(total_size)}) instantly to 100%!")
+        return True
 
     return False
 
