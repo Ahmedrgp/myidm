@@ -1397,8 +1397,6 @@ def is_hls_or_video_stream(url: str) -> bool:
 
 async def download_video_or_m3u8(
     video_url: str,
-async def download_video_or_m3u8(
-    video_url: str,
     output_dir: str,
     custom_name: str,
     referer_header: str,
