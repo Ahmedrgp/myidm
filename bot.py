@@ -1070,27 +1070,28 @@ async def handle_all_messages(client: Client, message: Message):
 
         await request_queue.put(("single", (url, custom_name, custom_caption), status_msg, message))
 
+async def handle_queued_task(task_data):
+    task_type = task_data[0]
+    try:
+        if task_type == "torrent":
+            _, torrent_src, status_msg, user_msg = task_data
+            await process_torrent_download(torrent_src, status_msg, user_msg)
+        elif task_type == "zip_bundle":
+            _, valid_requests, status_msg, user_msg = task_data
+            await process_zip_bundle(valid_requests, status_msg, user_msg)
+        else:
+            _, (url, custom_name, custom_caption), status_msg, user_msg = task_data
+            await process_download_and_upload(url, custom_name, custom_caption, status_msg, user_msg)
+    except Exception as e:
+        logger.exception(f"Task error: {e}")
+    finally:
+        request_queue.task_done()
+        gc.collect()
+
 async def queue_worker():
     while True:
         task_data = await request_queue.get()
-        task_type = task_data[0]
-        
-        try:
-            if task_type == "torrent":
-                _, torrent_src, status_msg, user_msg = task_data
-                await process_torrent_download(torrent_src, status_msg, user_msg)
-            elif task_type == "zip_bundle":
-                _, valid_requests, status_msg, user_msg = task_data
-                await process_zip_bundle(valid_requests, status_msg, user_msg)
-            else:
-                _, (url, custom_name, custom_caption), status_msg, user_msg = task_data
-                await process_download_and_upload(url, custom_name, custom_caption, status_msg, user_msg)
-        except Exception as e:
-            logger.exception(f"خطأ أثناء معالجة المهمة: {e}")
-        finally:
-            await asyncio.sleep(1.0)
-            request_queue.task_done()
-            gc.collect()
+        asyncio.create_task(handle_queued_task(task_data))
 
 # ==========================================
 # 12. معالجة وتنزيل ملفات التورينت (Torrent & Magnet Downloader Engine)
@@ -1510,9 +1511,6 @@ async def download_video_or_m3u8(
     candidate_referers = [
         referer_header if referer_header else origin_header,
         f"https://{base_domain}/",
-        f"https://{parsed_netloc}/",
-        "https://cima4u.skin/",
-        "https://wecima.cam/",
         None
     ]
 
@@ -1559,6 +1557,7 @@ async def download_video_or_m3u8(
             'fragment_retries': 10,
             'skip_unavailable_fragments': True,
             'concurrent_fragment_downloads': 8,
+            'socket_timeout': 8,
         }
 
         def run_ydl():
@@ -1642,6 +1641,14 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 icon, category_desc, is_video_type = get_god_category(filename)
                 is_video_type = True
                 download_success = True
+            else:
+                await status_msg.edit_text(
+                    "❌ <b>Stream Extraction Failed:</b>\n"
+                    "<code>Server returned 403 Forbidden or Stream Expired.</code>\n\n"
+                    "💡 <i>Try sending the movie page URL directly or another player server!</i>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
 
         # =========================================================================
         # 2. تشغيل محرك التنزيل المتوازي الفائق (Multi-Stream Turbo) للروابط المقيدة فقط (<1MB/s)
