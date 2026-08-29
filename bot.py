@@ -1582,6 +1582,36 @@ async def download_video_or_m3u8(
 
     return False, None, None
 
+async def resilient_send_media(client, chat_id, file_path, caption, is_video, progress_cb=None):
+    max_retries = 4
+    for attempt in range(max_retries):
+        try:
+            if is_video:
+                return await client.send_video(
+                    chat_id=chat_id,
+                    video=file_path,
+                    caption=caption,
+                    supports_streaming=True,
+                    progress=progress_cb,
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                return await client.send_document(
+                    chat_id=chat_id,
+                    document=file_path,
+                    caption=caption,
+                    progress=progress_cb,
+                    parse_mode=ParseMode.HTML
+                )
+        except FloodWait as fw:
+            logger.warning(f"Telegram FloodWait during upload: {fw.value}s - waiting...")
+            await asyncio.sleep(fw.value + 1)
+        except Exception as e:
+            logger.warning(f"Upload attempt {attempt+1} failed: {e}")
+            if attempt == max_retries - 1:
+                raise e
+            await asyncio.sleep(2.0)
+
 async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
     if hop_count >= 2:
         await status_msg.edit_text("❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
@@ -1917,19 +1947,13 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
 
                 caption = custom_caption if custom_caption else f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
                 
-                # إذا كانت القناة محددة نرفع للقناة، وإذا لم تكن محددة نرفع للرسائل المحفوظة / محادثة المستخدم
-                target_chat = CHANNEL_ID if CHANNEL_ID else user_msg.chat.id
+                target_chat = CHANNEL_ID if CHANNEL_ID else "me"
+                is_vid = is_video_type and settings["upload_mode"] != "doc"
                 try:
-                    if is_video_type and settings["upload_mode"] != "doc":
-                        await uploader.send_video(chat_id=target_chat, video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress_prem, parse_mode=ParseMode.HTML)
-                    else:
-                        await uploader.send_document(chat_id=target_chat, document=file_path, caption=caption, progress=pyrogram_progress_prem, parse_mode=ParseMode.HTML)
+                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem)
                 except Exception as prem_upload_err:
-                    logger.warning(f"Direct premium upload target error, trying 'me' (Saved Messages): {prem_upload_err}")
-                    if is_video_type and settings["upload_mode"] != "doc":
-                        await uploader.send_video(chat_id="me", video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress_prem, parse_mode=ParseMode.HTML)
-                    else:
-                        await uploader.send_document(chat_id="me", document=file_path, caption=caption, progress=pyrogram_progress_prem, parse_mode=ParseMode.HTML)
+                    logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
+                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem)
 
                 total_time_spent = round(time.time() - start_time)
                 avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
@@ -2023,11 +2047,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
         force_video = False if settings["upload_mode"] == "doc" else is_video_type
         
-        # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت (ضمان كامل لظهور الملف)
-        if force_video:
-            await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
-        else:
-            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+        # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت
+        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
