@@ -21,6 +21,7 @@ import tempfile
 import sqlite3
 import zipfile
 import urllib.parse
+import html
 from dotenv import load_dotenv
 import aiohttp
 from aiohttp import web
@@ -49,6 +50,16 @@ except ImportError:
 try:
     import yt_dlp
     YTDLP_AVAILABLE = True
+    try:
+        from yt_dlp.extractor import odnoklassniki
+        _orig_ok_parse_json = odnoklassniki.OdnoklassnikiIE._parse_json
+        def _safe_ok_parse_json(self, json_string, *args, **kwargs):
+            if isinstance(json_string, (dict, list)):
+                return json_string
+            return _orig_ok_parse_json(self, json_string, *args, **kwargs)
+        odnoklassniki.OdnoklassnikiIE._parse_json = _safe_ok_parse_json
+    except Exception as _patch_err:
+        pass
 except ImportError:
     YTDLP_AVAILABLE = False
 
@@ -439,9 +450,91 @@ def is_valid_binary_file(filepath: str) -> tuple:
 
     return False, header.decode("utf-8", errors="ignore")
 
+def extract_video_embed_from_html(html_text: str, original_url: str) -> tuple:
+    """استخراج مشغلات وسيرفرات الفيديو المضمنة في صفحات المشاهدة (مثل AhwakTV، FaselHD، وغيرها)"""
+    if not html_text:
+        return None, None
+
+    # استخراج عنوان الفيلم أو الحلقة بدقة
+    title_match = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html_text, re.I)
+    if not title_match:
+        title_match = re.search(r'<title>([^<]+)</title>', html_text, re.I)
+
+    extracted_title = ""
+    if title_match:
+        raw_t = html.unescape(title_match.group(1)).strip()
+        cleaned = re.split(r'[-|–—•»]', raw_t)[0].strip()
+        cleaned = re.sub(r'[\\/*?:"<>|]', '', cleaned).strip()
+        extracted_title = cleaned
+
+    candidate_urls = []
+
+    # 1. عناصر قوائم السيرفرات (WatchList / data-embed-url / data-url / data-src)
+    embed_attrs = [
+        r'<li[^>]*data-embed-url=["\']([^"\']+)["\']',
+        r'data-embed-url=["\']([^"\']+)["\']',
+        r'data-url=["\']([^"\']+)["\']',
+        r'data-src=["\']([^"\']+)["\']',
+        r'data-embed=["\']([^"\']+)["\']'
+    ]
+    for pattern in embed_attrs:
+        for match in re.findall(pattern, html_text, re.I):
+            clean = html.unescape(match).strip()
+            if clean.startswith("//"):
+                clean = "https:" + clean
+            if clean.startswith("http"):
+                candidate_urls.append(clean)
+
+    # 2. إطارات iframes المضمنة
+    for ifr in re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', html_text, re.I):
+        clean = html.unescape(ifr).strip()
+        if clean.startswith("//"):
+            clean = "https:" + clean
+        if clean.startswith("http"):
+            candidate_urls.append(clean)
+
+    # 3. تدفقات الفيديو المباشرة ومصادر HTML5 video في كود الصفحة
+    for v in re.findall(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd|mp4)[^\s"\'<>]*)', html_text, re.I):
+        candidate_urls.append(v)
+
+    # استبعاد روابط التواصل الاجتماعي والإعلانات
+    ignore_domains = ["facebook.com", "twitter.com", "x.com", "google.com", "disqus.com", "analytics", "doubleclick", "mg.pamphiltre"]
+    unique_candidates = []
+    seen = set()
+    for c in candidate_urls:
+        if c not in seen and not any(ign in c.lower() for ign in ignore_domains):
+            seen.add(c)
+            unique_candidates.append(c)
+
+    # ترتيب الأفضلية: تفضيل سيرفرات OK.ru ثم Dood و Streamwish وباقي السيرفرات
+    priority_hosts = [
+        "ok.ru", "odnoklassniki", "dood", "streamwish", "filelions", "vidtube",
+        "streamtape", "mixdrop", "mp4upload", "vidspeed", "voe.sx", "uqload", "vk.com"
+    ]
+
+    sorted_candidates = sorted(
+        unique_candidates,
+        key=lambda u: next((i for i, h in enumerate(priority_hosts) if h in u.lower()), 999)
+    )
+
+    if sorted_candidates:
+        best_candidate = sorted_candidates[0]
+        m_ok = re.search(r'(?:ok\.ru/video/|ok\.ru/videoembed/)(\d+)', best_candidate)
+        if m_ok:
+            best_candidate = f"https://ok.ru/videoembed/{m_ok.group(1)}"
+        return best_candidate, extracted_title
+
+    return None, extracted_title
+
 def extract_real_download_link_from_html(html_text: str, original_url: str) -> str:
     if not html_text:
         return ""
+
+    # فحص مشغلات الفيديو وسيرفرات الأفلام أولاً
+    video_embed, video_title = extract_video_embed_from_html(html_text, original_url)
+    if video_embed:
+        title_part = f"&title={urllib.parse.quote(video_title)}" if video_title else ""
+        return f"{video_embed}#ref={urllib.parse.quote(original_url)}{title_part}"
 
     forbidden = ["an1store.apk", "store.apk", "googleplay", "telegram", "play.google.com", "ad.doubleclick"]
     all_links = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
@@ -596,36 +689,25 @@ async def unrestrict_direct_link(url: str) -> str:
             else:
                 target_ok_url = clean_url
 
+            movie_title = ""
             if CURL_CFFI_AVAILABLE:
-                async with CurlAsyncSession(impersonate="chrome124") as session:
-                    ok_resp = await session.get(target_ok_url, headers=STEALTH_HEADERS, timeout=15)
-                    matches = re.findall(r'data-options="([^"]+)"', ok_resp.text)
-                    if matches:
-                        unescaped = matches[0].replace("&quot;", '"').replace("&amp;", "&")
-                        ok_data = json.loads(unescaped)
-                        meta_val = ok_data.get("flashvars", {}).get("metadata", {})
-                        if isinstance(meta_val, str):
-                            meta_val = json.loads(meta_val)
-                        
-                        movie_title = meta_val.get("movie", {}).get("title", f"ok_video_{int(time.time())}")
-                        movie_title = re.sub(r'[\\/*?:"<>|]', "", movie_title).strip()
-                        videos_list = meta_val.get("videos", [])
-                        
-                        quality_priority = ["ultra", "quad", "full", "hd", "sd", "low", "lowest", "mobile"]
-                        selected_v = None
-                        for q in quality_priority:
-                            for v_item in videos_list:
-                                if v_item.get("name") == q:
-                                    selected_v = v_item
-                                    break
-                            if selected_v:
-                                break
-                        if not selected_v and videos_list:
-                            selected_v = videos_list[0]
-                            
-                        if selected_v and selected_v.get("url"):
-                            chosen_url = selected_v.get("url")
-                            return f"{chosen_url}#title={urllib.parse.quote(movie_title)}&ref=https://ok.ru/"
+                try:
+                    async with CurlAsyncSession(impersonate="chrome124") as session:
+                        ok_resp = await session.get(target_ok_url, headers=STEALTH_HEADERS, timeout=10)
+                        matches = re.findall(r'data-options="([^"]+)"', ok_resp.text)
+                        if matches:
+                            unescaped = matches[0].replace("&quot;", '"').replace("&amp;", "&")
+                            ok_data = json.loads(unescaped)
+                            meta_val = ok_data.get("flashvars", {}).get("metadata", {})
+                            if isinstance(meta_val, str):
+                                meta_val = json.loads(meta_val)
+                            movie_title = meta_val.get("movie", {}).get("title", "")
+                            movie_title = re.sub(r'[\\/*?:"<>|]', "", movie_title).strip()
+                except Exception:
+                    pass
+
+            title_param = f"&title={urllib.parse.quote(movie_title)}" if movie_title else ""
+            return f"{target_ok_url}#ref=https://ok.ru/{title_param}"
         except Exception as ok_err:
             logger.warning(f"ok.ru extraction error: {ok_err}")
 
@@ -633,7 +715,7 @@ async def unrestrict_direct_link(url: str) -> str:
     if "catbox.moe" in url:
         return url
 
-    # فاحص عام لصفحات الويب بتقنية البث لتقليل الـ RAM
+    # فاحص عام لصفحات الويب لاستخراج مشغلات الفيديو أو روابط التنزيل المباشرة
     try:
         if CURL_CFFI_AVAILABLE:
             async with CurlAsyncSession(impersonate="chrome124") as session:
@@ -641,9 +723,15 @@ async def unrestrict_direct_link(url: str) -> str:
                 content_bytes = bytearray()
                 async for chunk in resp.aiter_content(32 * 1024):
                     content_bytes.extend(chunk)
-                    if len(content_bytes) >= 128 * 1024:
+                    if len(content_bytes) >= 300 * 1024:
                         break
-                html_sample = content_bytes.decode("utf-8", errors="ignore")
+                try:
+                    html_sample = content_bytes.decode("utf-8")
+                    if "\ufffd" in html_sample:
+                        html_sample = content_bytes.decode("cp1256", errors="ignore")
+                except Exception:
+                    html_sample = content_bytes.decode("cp1256", errors="ignore")
+
                 extracted = extract_real_download_link_from_html(html_sample, url)
                 if extracted:
                     return extracted
@@ -873,8 +961,20 @@ async def probe_command_handler(client: Client, message: Message):
     
     try:
         direct_url = await unrestrict_direct_link(raw_url)
+        custom_cookie = ""
+        referer_header = ""
+        if "#" in direct_url:
+            base_part, fragment_part = direct_url.split("#", 1)
+            direct_url = base_part
+            params = urllib.parse.parse_qs(fragment_part)
+            if "ref" in params:
+                referer_header = params["ref"][0]
+            if "cookie" in params and params["cookie"][0]:
+                custom_cookie = f"PHPSESSID={params['cookie'][0]}"
+
         parsed_url = urllib.parse.urlparse(direct_url)
-        referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
+        if not referer_header:
+            referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         if CURL_CFFI_AVAILABLE:
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
@@ -1573,7 +1673,8 @@ def is_hls_or_video_stream(url: str) -> bool:
         "streamtape", "mixdrop", "mp4upload", "vidoza", "streamwish",
         "filelions", "dropload", "streamvid", "minochinos.com",
         "youtube.com", "youtu.be", "twitter.com", "x.com", "tiktok.com",
-        "facebook.com", "fb.watch", "instagram.com", "ok.ru", "odnoklassniki.ru", "vk.com"
+        "facebook.com", "fb.watch", "instagram.com", "ok.ru", "odnoklassniki.ru", "vk.com",
+        "vidspeed", "voe.sx", "uqload", "yourupload", "ds2play", "okcdn.ru"
     ]
     parsed_netloc = urllib.parse.urlparse(url).netloc.lower()
     return any(host in parsed_netloc for host in video_hosts)
@@ -1595,6 +1696,11 @@ async def download_video_or_m3u8(
         return False, None, None
 
     loop = asyncio.get_running_loop()
+
+    # تطبيع رابط ok.ru لاستخدام videoembed وتجنب بطء صفحة الويب
+    m_ok = re.search(r'(?:ok\.ru/video/|ok\.ru/videoembed/)(\d+)', video_url)
+    if m_ok:
+        video_url = f"https://ok.ru/videoembed/{m_ok.group(1)}"
 
     if custom_name:
         out_template = os.path.join(output_dir, f"{custom_name}.%(ext)s")
@@ -1655,7 +1761,8 @@ async def download_video_or_m3u8(
             'fragment_retries': 10,
             'skip_unavailable_fragments': True,
             'concurrent_fragment_downloads': 8,
-            'socket_timeout': 8,
+            'socket_timeout': 25,
+            'geo_bypass': True,
         }
 
         def run_ydl():
@@ -1677,6 +1784,69 @@ async def download_video_or_m3u8(
         except Exception as e:
             logger.warning(f"yt-dlp try with ref [{current_ref}] failed: {e}")
             await asyncio.sleep(0.5)
+
+    # محرك طوارئ مباشر لمقاطع OK.ru في حال تعذر المحرك الأساسي
+    if "ok.ru" in video_url or "odnoklassniki.ru" in video_url:
+        try:
+            logger.info("⚡ Activating direct OK.ru stream fallback...")
+            m_ok = re.search(r'(?:ok\.ru/video/|ok\.ru/videoembed/)(\d+)', video_url)
+            clean_embed = f"https://ok.ru/videoembed/{m_ok.group(1)}" if m_ok else video_url
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as fb_session:
+                async with fb_session.get(clean_embed, headers={**STEALTH_HEADERS, "Referer": "https://ok.ru/"}) as fb_resp:
+                    if fb_resp.status == 200:
+                        fb_html = await fb_resp.text(errors="ignore")
+                        m_opts = re.search(r'data-options=(["\'])(.*?)\1', fb_html)
+                        if m_opts:
+                            raw_opts = html.unescape(m_opts.group(2))
+                            opts_data = json.loads(raw_opts)
+                            meta_v = opts_data.get("flashvars", {}).get("metadata")
+                            if isinstance(meta_v, str):
+                                meta_v = json.loads(meta_v)
+                            
+                            direct_v_url = None
+                            if isinstance(meta_v, dict) and "videos" in meta_v and meta_v["videos"]:
+                                q_prio = ["ultra", "quad", "full", "hd", "sd", "low", "lowest", "mobile"]
+                                for q in q_prio:
+                                    for v_cand in meta_v["videos"]:
+                                        if v_cand.get("name") == q and v_cand.get("url"):
+                                            direct_v_url = v_cand.get("url")
+                                            break
+                                    if direct_v_url:
+                                        break
+                                if not direct_v_url and meta_v["videos"]:
+                                    direct_v_url = meta_v["videos"][0].get("url")
+
+                            if direct_v_url:
+                                m_title = meta_v.get("movie", {}).get("title") if isinstance(meta_v, dict) else None
+                                v_title = custom_name or m_title or f"video_{int(time.time())}"
+                                v_title = re.sub(r'[\\/*?:"<>|]', '', v_title).strip()
+                                target_mp4 = os.path.join(output_dir, f"{v_title}.mp4")
+                                
+                                dl_headers = {
+                                    "User-Agent": STEALTH_HEADERS["User-Agent"],
+                                    "Referer": "https://ok.ru/"
+                                }
+                                status_tracker = {"downloaded": 0}
+                                async with fb_session.get(direct_v_url, headers=dl_headers, ssl=False) as stream_resp:
+                                    if stream_resp.status in (200, 206):
+                                        total_b = int(stream_resp.headers.get("Content-Length", 0))
+                                        with open(target_mp4, "wb") as f_out:
+                                            async for chunk in stream_resp.content.iter_chunked(512 * 1024):
+                                                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                                                    return False, None, None
+                                                f_out.write(chunk)
+                                                status_tracker["downloaded"] += len(chunk)
+                                                await progress_bar(
+                                                    status_tracker["downloaded"], total_b,
+                                                    tr(lang, "downloading"), status_msg,
+                                                    dl_start_time, last_update,
+                                                    icon="🎬", task_id=task_id, lang=lang
+                                                )
+                                        if os.path.exists(target_mp4) and os.path.getsize(target_mp4) > 100 * 1024:
+                                            return True, target_mp4, os.path.basename(target_mp4)
+        except Exception as fb_err:
+            logger.warning(f"Direct OK.ru stream fallback notice: {fb_err}")
 
     return False, None, None
 
@@ -1728,8 +1898,9 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         parsed_url = urllib.parse.urlparse(direct_url)
         
         custom_cookie = ""
+        referer_header = ""
         doc_extracted_title = ""
-        if "#ref=" in direct_url:
+        if "#" in direct_url:
             base_part, fragment_part = direct_url.split("#", 1)
             direct_url = base_part
             parsed_url = urllib.parse.urlparse(direct_url)
@@ -1739,15 +1910,17 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             if "cookie" in params and params["cookie"][0]:
                 custom_cookie = f"PHPSESSID={params['cookie'][0]}"
             if "title" in params and params["title"][0]:
-                doc_extracted_title = params["title"][0]
-                if not custom_name:
+                doc_extracted_title = urllib.parse.unquote(params["title"][0]).strip()
+                if not custom_name and doc_extracted_title:
                     custom_name = doc_extracted_title
-        elif "an1.net" in direct_url or "an1.com" in direct_url:
-            referer_header = "https://an1.com/"
-        elif "documentaryarea.com" in direct_url:
-            referer_header = "https://www.documentaryarea.com/"
-        else:
-            referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+
+        if not referer_header:
+            if "an1.net" in direct_url or "an1.com" in direct_url:
+                referer_header = "https://an1.com/"
+            elif "documentaryarea.com" in direct_url:
+                referer_header = "https://www.documentaryarea.com/"
+            else:
+                referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         status_tracker = {"downloaded": 0}
         dl_start_time = time.time()
@@ -2030,8 +2203,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             os.remove(file_path)
             real_url = extract_real_download_link_from_html(html_sample, raw_url)
             
-            if real_url and real_url != raw_url:
-                logger.info(f"🔗 Real direct APK URL extracted: {real_url}")
+            if real_url and real_url.split('#')[0] != raw_url.split('#')[0]:
+                logger.info(f"🔗 Real direct URL extracted from HTML: {real_url}")
                 await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg, hop_count=hop_count+1)
                 return
             else:
