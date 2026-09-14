@@ -568,8 +568,11 @@ async def unrestrict_direct_link(url: str) -> str:
                                 playback_hash = m.group(1)
                                 cookies = session.cookies.get_dict()
                                 phpsessid = cookies.get("PHPSESSID", "")
+                                doc_title = "Documentary"
+                                if "/video/" in target_page:
+                                    doc_title = target_page.split("/video/")[1].strip("/").replace("+", " ").replace("-", " ")
                                 direct_stream = f"https://www.documentaryarea.com/video.php?playback={playback_hash}"
-                                return f"{direct_stream}#ref={urllib.parse.quote(target_page)}&cookie={phpsessid}"
+                                return f"{direct_stream}#ref={urllib.parse.quote(target_page)}&cookie={phpsessid}&title={urllib.parse.quote(doc_title)}"
         except Exception as e:
             logger.warning(f"documentaryarea error: {e}")
 
@@ -648,8 +651,16 @@ def smart_extract_filename(url: str, headers: dict) -> str:
     
     parsed = urllib.parse.urlparse(url)
     filename = os.path.basename(parsed.path)
+    ctype = (headers.get("Content-Type", "") or headers.get("content-type", "")).lower()
     if filename and "." in filename:
-        return urllib.parse.unquote(filename)
+        if filename.lower().endswith((".php", ".asp", ".aspx", ".jsp", ".bin", ".cgi")):
+            if "video/mp4" in ctype or "video" in ctype:
+                base = os.path.splitext(filename)[0]
+                return f"{base}.mp4" if base != "video" else f"video_{int(time.time())}.mp4"
+            elif "application/vnd.android.package-archive" in ctype:
+                return f"{os.path.splitext(filename)[0]}.apk"
+        else:
+            return urllib.parse.unquote(filename)
 
     ctype = (headers.get("Content-Type", "") or headers.get("content-type", "")).lower()
     ext_map = {
@@ -1662,6 +1673,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         parsed_url = urllib.parse.urlparse(direct_url)
         
         custom_cookie = ""
+        doc_extracted_title = ""
         if "#ref=" in direct_url:
             base_part, fragment_part = direct_url.split("#", 1)
             direct_url = base_part
@@ -1671,6 +1683,10 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 referer_header = params["ref"][0]
             if "cookie" in params and params["cookie"][0]:
                 custom_cookie = f"PHPSESSID={params['cookie'][0]}"
+            if "title" in params and params["title"][0]:
+                doc_extracted_title = params["title"][0]
+                if not custom_name:
+                    custom_name = doc_extracted_title
         elif "an1.net" in direct_url or "an1.com" in direct_url:
             referer_header = "https://an1.com/"
         elif "documentaryarea.com" in direct_url:
@@ -2135,8 +2151,11 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         await status_msg.edit_text("❌ <b>Request Timeout.</b>", parse_mode=ParseMode.HTML)
     except OSError as e:
         await status_msg.edit_text(f"❌ <b>Disk/Storage Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+    except MessageNotModified:
+        pass
     except RPCError as e:
-        await status_msg.edit_text(f"❌ <b>Telegram Upload Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        if "MESSAGE_NOT_MODIFIED" not in str(e):
+            await status_msg.edit_text(f"❌ <b>Telegram Upload Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     except Exception as e:
         await status_msg.edit_text(f"❌ <b>Unexpected Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
