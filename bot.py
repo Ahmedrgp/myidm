@@ -1071,94 +1071,102 @@ async def history_command_handler(client: Client, message: Message):
 
 @bot.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
-    data = query.data
-    user_id = query.from_user.id if query.from_user else 0
-    st = db_get_user_settings(user_id)
-    lang = st["lang"]
-    
-    if data.startswith("cancel_"):
-        task_id = data.split("cancel_", 1)[1]
-        if task_id in ACTIVE_TASKS:
-            ACTIVE_TASKS[task_id]["cancelled"] = True
-            await query.answer("🛑 Task cancelled / تم الإلغاء...", show_alert=True)
-        else:
-            await query.answer("⚠️ Task already completed.", show_alert=True)
-        return
+    try:
+        data = query.data
+        user_id = query.from_user.id if query.from_user else 0
+        st = db_get_user_settings(user_id)
+        lang = st["lang"]
+        
+        if data.startswith("cancel_"):
+            task_id = data.split("cancel_", 1)[1]
+            if task_id in ACTIVE_TASKS:
+                ACTIVE_TASKS[task_id]["cancelled"] = True
+                await query.answer("🛑 Task cancelled / تم الإلغاء...", show_alert=True)
+            else:
+                await query.answer("⚠️ Task already completed.", show_alert=True)
+            return
 
-    if data == "toggle_lang":
-        new_lang = "en" if lang == "ar" else "ar"
-        db_update_user_setting(user_id, "lang", new_lang)
-        await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
-        await query.answer("Language updated! / تم تغيير اللغة!", show_alert=True)
-        return
+        if data == "toggle_lang":
+            new_lang = "en" if lang == "ar" else "ar"
+            db_update_user_setting(user_id, "lang", new_lang)
+            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.answer("Language updated! / تم تغيير اللغة!", show_alert=True)
+            return
 
-    elif data == "toggle_mode":
-        new_mode = "doc" if st["upload_mode"] == "auto" else "auto"
-        db_update_user_setting(user_id, "upload_mode", new_mode)
-        await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
-        await query.answer("Upload mode toggled!")
-        return
+        elif data == "toggle_mode":
+            new_mode = "doc" if st["upload_mode"] == "auto" else "auto"
+            db_update_user_setting(user_id, "upload_mode", new_mode)
+            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.answer("Upload mode toggled!")
+            return
 
-    elif data == "toggle_threads":
-        thread_modes = [16, 32, 64]
-        curr_idx = thread_modes.index(st["god_threads"]) if st["god_threads"] in thread_modes else 0
-        new_threads = thread_modes[(curr_idx + 1) % len(thread_modes)]
-        db_update_user_setting(user_id, "god_threads", new_threads)
-        await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
-        await query.answer(f"Threads updated to {new_threads}x!")
-        return
+        elif data == "toggle_threads":
+            thread_modes = [16, 32, 64]
+            curr_idx = thread_modes.index(st["god_threads"]) if st["god_threads"] in thread_modes else 0
+            new_threads = thread_modes[(curr_idx + 1) % len(thread_modes)]
+            db_update_user_setting(user_id, "god_threads", new_threads)
+            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.answer(f"Threads updated to {new_threads}x!")
+            return
 
-    if data == "btn_start":
-        sender = query.from_user.first_name if query.from_user else 'Master'
-        await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=make_start_keyboard(lang), parse_mode=ParseMode.HTML)
+        if data == "btn_start":
+            sender = query.from_user.first_name if query.from_user else 'Master'
+            await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=make_start_keyboard(lang), parse_mode=ParseMode.HTML)
 
-    elif data == "btn_god_panel":
-        g_stats = db_get_global_stats()
-        god_card = tr(lang, "god_panel", threads=st['god_threads'], files=g_stats['files'], bytes=humanbytes(g_stats['bytes']))
-        await query.message.edit_text(god_card, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+        elif data == "btn_god_panel":
+            g_stats = db_get_global_stats()
+            god_card = tr(lang, "god_panel", threads=st['god_threads'], files=g_stats['files'], bytes=humanbytes(g_stats['bytes']))
+            await query.message.edit_text(god_card, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
-    elif data == "btn_probe_info":
-        await query.message.edit_text(tr(lang, "probe_info"), reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+        elif data == "btn_probe_info":
+            await query.message.edit_text(tr(lang, "probe_info"), reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
-    elif data == "btn_settings":
-        await query.message.edit_text(
-            tr(lang, "settings_title"),
-            reply_markup=make_settings_keyboard(user_id),
-            parse_mode=ParseMode.HTML
-        )
-    
-    elif data == "btn_help":
-        await query.message.edit_text(tr(lang, "help_text"), reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+        elif data == "btn_settings":
+            await query.message.edit_text(
+                tr(lang, "settings_title"),
+                reply_markup=make_settings_keyboard(user_id),
+                parse_mode=ParseMode.HTML
+            )
+        
+        elif data == "btn_help":
+            await query.message.edit_text(tr(lang, "help_text"), reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
-    elif data == "btn_history":
-        history_list = db_get_history(user_id, limit=10)
-        if not history_list:
-            text = "📜 <b>No download history found / لا يوجد سجل تحميلات بعد.</b>"
-        else:
-            text = "📜 <b>Latest Downloads / أحدث التحميلات:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            for i, (fname, fsize, fcat, fts) in enumerate(history_list, 1):
-                t_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(fts))
-                text += f"{i}. 📄 <code>{fname}</code>\n   🏷️ {fcat} | 📊 {humanbytes(fsize)} | ⏱️ {t_str}\n\n"
-            text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        await query.message.edit_text(text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+        elif data == "btn_history":
+            history_list = db_get_history(user_id, limit=10)
+            if not history_list:
+                text = "📜 <b>No download history found / لا يوجد سجل تحميلات بعد.</b>"
+            else:
+                text = "📜 <b>Latest Downloads / أحدث التحميلات:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                for i, (fname, fsize, fcat, fts) in enumerate(history_list, 1):
+                    t_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(fts))
+                    text += f"{i}. 📄 <code>{fname}</code>\n   🏷️ {fcat} | 📊 {humanbytes(fsize)} | ⏱️ {t_str}\n\n"
+                text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            await query.message.edit_text(text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
-    elif data == "btn_stats":
-        g_stats = db_get_global_stats()
-        queue_size = request_queue.qsize()
-        uptime_sec = int(time.time() - START_TIME)
-        stats_text = (
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 <b>Engine Stats / إحصائيات المحرك</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⏱️ <b>Uptime:</b> <code>{time_formatter(uptime_sec)}</code>\n"
-            f"📄 <b>Total Files:</b> <code>{g_stats['files']}</code>\n"
-            f"📊 <b>Total Bytes:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
-            f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        await query.message.edit_text(stats_text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+        elif data == "btn_stats":
+            g_stats = db_get_global_stats()
+            queue_size = request_queue.qsize()
+            uptime_sec = int(time.time() - START_TIME)
+            stats_text = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>Engine Stats / إحصائيات المحرك</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⏱️ <b>Uptime:</b> <code>{time_formatter(uptime_sec)}</code>\n"
+                f"📄 <b>Total Files:</b> <code>{g_stats['files']}</code>\n"
+                f"📊 <b>Total Bytes:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
+                f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await query.message.edit_text(stats_text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
-    await query.answer()
+        await query.answer()
+    except MessageNotModified:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+    except Exception as cb_err:
+        logger.warning(f"Callback query handler notice: {cb_err}")
 
 # ==========================================
 # 10. استقبال وتجهيز المستندات والتورينت (.torrent Document)
