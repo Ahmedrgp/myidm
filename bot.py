@@ -11,6 +11,7 @@ except RuntimeError:
 
 import os
 import sys
+import json
 import time
 import math
 import re
@@ -576,6 +577,58 @@ async def unrestrict_direct_link(url: str) -> str:
         except Exception as e:
             logger.warning(f"documentaryarea error: {e}")
 
+    # OK.ru / Odnoklassniki / VK Video
+    if "ok.ru" in url or "odnoklassniki.ru" in url:
+        try:
+            clean_url = url.strip()
+            if "src=" in clean_url:
+                src_match = re.search(r'src=["\']([^"\']+)["\']', clean_url)
+                if src_match:
+                    clean_url = src_match.group(1)
+            if clean_url.startswith("//"):
+                clean_url = "https:" + clean_url
+            if not clean_url.startswith("http"):
+                clean_url = "https://" + clean_url.lstrip("/")
+
+            m_id = re.search(r'(?:video/|videoembed/|ok\.ru/)([0-9]{8,})', clean_url)
+            if m_id:
+                target_ok_url = f"https://ok.ru/videoembed/{m_id.group(1)}"
+            else:
+                target_ok_url = clean_url
+
+            if CURL_CFFI_AVAILABLE:
+                async with CurlAsyncSession(impersonate="chrome124") as session:
+                    ok_resp = await session.get(target_ok_url, headers=STEALTH_HEADERS, timeout=15)
+                    matches = re.findall(r'data-options="([^"]+)"', ok_resp.text)
+                    if matches:
+                        unescaped = matches[0].replace("&quot;", '"').replace("&amp;", "&")
+                        ok_data = json.loads(unescaped)
+                        meta_val = ok_data.get("flashvars", {}).get("metadata", {})
+                        if isinstance(meta_val, str):
+                            meta_val = json.loads(meta_val)
+                        
+                        movie_title = meta_val.get("movie", {}).get("title", f"ok_video_{int(time.time())}")
+                        movie_title = re.sub(r'[\\/*?:"<>|]', "", movie_title).strip()
+                        videos_list = meta_val.get("videos", [])
+                        
+                        quality_priority = ["ultra", "quad", "full", "hd", "sd", "low", "lowest", "mobile"]
+                        selected_v = None
+                        for q in quality_priority:
+                            for v_item in videos_list:
+                                if v_item.get("name") == q:
+                                    selected_v = v_item
+                                    break
+                            if selected_v:
+                                break
+                        if not selected_v and videos_list:
+                            selected_v = videos_list[0]
+                            
+                        if selected_v and selected_v.get("url"):
+                            chosen_url = selected_v.get("url")
+                            return f"{chosen_url}#title={urllib.parse.quote(movie_title)}&ref=https://ok.ru/"
+        except Exception as ok_err:
+            logger.warning(f"ok.ru extraction error: {ok_err}")
+
     # Catbox
     if "catbox.moe" in url:
         return url
@@ -650,6 +703,8 @@ def smart_extract_filename(url: str, headers: dict) -> str:
                     return urllib.parse.unquote(filename)
     
     parsed = urllib.parse.urlparse(url)
+    if "okcdn.ru" in url:
+        return f"video_{int(time.time())}.mp4"
     filename = os.path.basename(parsed.path)
     ctype = (headers.get("Content-Type", "") or headers.get("content-type", "")).lower()
     if filename and "." in filename:
@@ -1518,7 +1573,7 @@ def is_hls_or_video_stream(url: str) -> bool:
         "streamtape", "mixdrop", "mp4upload", "vidoza", "streamwish",
         "filelions", "dropload", "streamvid", "minochinos.com",
         "youtube.com", "youtu.be", "twitter.com", "x.com", "tiktok.com",
-        "facebook.com", "fb.watch", "instagram.com"
+        "facebook.com", "fb.watch", "instagram.com", "ok.ru", "odnoklassniki.ru", "vk.com"
     ]
     parsed_netloc = urllib.parse.urlparse(url).netloc.lower()
     return any(host in parsed_netloc for host in video_hosts)
