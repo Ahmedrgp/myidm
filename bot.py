@@ -1523,13 +1523,16 @@ async def download_multi_stream_turbo(
     if total_size <= 0:
         return False
 
-    # كتل صغيرة جداً (256KB - 512KB) لمنع أي تعليق في آخر 1%
-    if total_size > 500 * 1024 * 1024:
+    # كتل متوازنة ديناميكياً (512KB - 2MB) لضمان أقصى سرعة نقل وتفادي التباطؤ
+    if total_size > 1024 * 1024 * 1024:
         concurrency = min(num_connections, 48)
-        block_size = 512 * 1024
-    else:
+        block_size = 2 * 1024 * 1024
+    elif total_size > 200 * 1024 * 1024:
         concurrency = min(num_connections, 32)
-        block_size = 256 * 1024
+        block_size = 1024 * 1024
+    else:
+        concurrency = min(num_connections, 24)
+        block_size = 512 * 1024
 
     blocks = []
     current_byte = 0
@@ -1551,6 +1554,7 @@ async def download_multi_stream_turbo(
     lock = asyncio.Lock()
 
     try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "wb") as f:
             f.seek(total_size - 1)
             f.write(b"\0")
@@ -1572,8 +1576,8 @@ async def download_multi_stream_turbo(
         expected_len = end_byte - start_byte + 1
         
         try:
-            b_timeout = aiohttp.ClientTimeout(total=8, sock_connect=4, sock_read=6)
-            async with session.get(direct_url, headers=req_headers, timeout=b_timeout, allow_redirects=True) as resp:
+            b_timeout = aiohttp.ClientTimeout(total=15, sock_connect=5, sock_read=10)
+            async with session.get(direct_url, headers=req_headers, timeout=b_timeout, allow_redirects=True, ssl=False) as resp:
                 if resp.status == 206:
                     block_data = await resp.read()
                     if len(block_data) == expected_len and b_id not in completed_blocks:
@@ -1641,7 +1645,7 @@ async def download_multi_stream_turbo(
         return True
 
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=20)
-    connector = aiohttp.TCPConnector(limit=concurrency + 20, limit_per_host=concurrency + 10, keepalive_timeout=30)
+    connector = aiohttp.TCPConnector(limit=concurrency + 20, limit_per_host=concurrency + 10, keepalive_timeout=30, ssl=False)
     
     try:
         async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
@@ -1682,10 +1686,73 @@ def is_hls_or_video_stream(url: str) -> bool:
         "filelions", "dropload", "streamvid", "minochinos.com",
         "youtube.com", "youtu.be", "twitter.com", "x.com", "tiktok.com",
         "facebook.com", "fb.watch", "instagram.com", "ok.ru", "odnoklassniki.ru", "vk.com",
-        "vidspeed", "voe.sx", "uqload", "yourupload", "ds2play", "okcdn.ru"
+        "vidspeed", "voe.sx", "uqload", "yourupload", "ds2play", "okcdn.ru", "mycdn.me"
     ]
     parsed_netloc = urllib.parse.urlparse(url).netloc.lower()
     return any(host in parsed_netloc for host in video_hosts)
+
+async def get_ok_direct_mp4(embed_or_video_url: str) -> tuple:
+    """استخراج رابط MP4 المباشر عالي السرعة من سيرفرات OK.ru مع حساب حجم الملف بدقة دون استهلاك الباقة"""
+    m_ok = re.search(r'(?:ok\.ru/video/|ok\.ru/videoembed/|ok\.ru/)([0-9]{8,})', embed_or_video_url)
+    clean_embed = f"https://ok.ru/videoembed/{m_ok.group(1)}" if m_ok else embed_or_video_url
+    
+    headers = {**STEALTH_HEADERS, "Referer": "https://ok.ru/"}
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=12)) as session:
+        async with session.get(clean_embed, headers=headers) as resp:
+            if resp.status != 200:
+                return None, None, 0
+            text = await resp.text(errors="ignore")
+            m = re.search(r'data-options=(["\'])(.*?)\1', text)
+            if not m:
+                return None, None, 0
+            try:
+                raw_opts = json.loads(html.unescape(m.group(2)))
+            except Exception:
+                return None, None, 0
+            meta = raw_opts.get("flashvars", {}).get("metadata", {})
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    pass
+            
+            movie_title = meta.get("movie", {}).get("title", "") if isinstance(meta, dict) else ""
+            videos = meta.get("videos", []) if isinstance(meta, dict) else []
+            
+            # ترتيب الجودات من الأعلى إلى الأدنى لاختيار أفضل نسخة MP4 تدعم التيربو
+            q_prio = ["ultra", "quad", "full", "hd", "sd", "low", "lowest", "mobile"]
+            direct_url = None
+            for q in q_prio:
+                for v in videos:
+                    if v.get("name") == q and v.get("url"):
+                        direct_url = v.get("url")
+                        break
+                if direct_url:
+                    break
+            if not direct_url and videos:
+                direct_url = videos[0].get("url")
+                
+            if not direct_url:
+                return None, movie_title, 0
+                
+            # فحص حجم الملف الفعلي عبر طلب Range خفيف (1KB) دون استهلاك الباقة
+            probe_headers = {
+                "User-Agent": STEALTH_HEADERS["User-Agent"],
+                "Referer": "https://ok.ru/",
+                "Range": "bytes=0-1024"
+            }
+            try:
+                async with session.get(direct_url, headers=probe_headers, ssl=False) as p_resp:
+                    total_size = 0
+                    cr = p_resp.headers.get("Content-Range", "")
+                    if "/" in cr:
+                        total_size = int(cr.split("/")[1])
+                    elif "Content-Length" in p_resp.headers:
+                        total_size = int(p_resp.headers["Content-Length"])
+                    return direct_url, movie_title, total_size
+            except Exception:
+                return direct_url, movie_title, 0
 
 async def download_video_or_m3u8(
     video_url: str,
@@ -1698,17 +1765,70 @@ async def download_video_or_m3u8(
     dl_start_time: float,
     last_update: list
 ) -> tuple:
-    """تحميل روابط البث m3u8 ومشغلات الفيديو المضمنة وتحويلها إلى MP4 1080p عالية الجودة"""
-    if not YTDLP_AVAILABLE:
-        logger.warning("yt-dlp is not installed!")
-        return False, None, None
-
+    """تحميل روابط البث m3u8 ومشغلات الفيديو المضمنة وتحويلها إلى MP4 1080p عالية الجودة بأقصى سرعة"""
     loop = asyncio.get_running_loop()
 
     # تطبيع رابط ok.ru لاستخدام videoembed وتجنب بطء صفحة الويب
     m_ok = re.search(r'(?:ok\.ru/video/|ok\.ru/videoembed/)(\d+)', video_url)
     if m_ok:
         video_url = f"https://ok.ru/videoembed/{m_ok.group(1)}"
+
+    # 1. تفعيل محرك التيربو الخارق فائق السرعة (32x Multi-Stream Turbo) لمقاطع OK.ru لتفادي بطء DASH
+    if "ok.ru" in video_url or "odnoklassniki.ru" in video_url:
+        try:
+            logger.info("🚀 OK.ru detected! Resolving high-speed progressive MP4...")
+            direct_mp4_url, ok_title, total_file_size = await get_ok_direct_mp4(video_url)
+            if direct_mp4_url and total_file_size > 0:
+                if custom_name:
+                    v_title = custom_name[:-4] if custom_name.lower().endswith(".mp4") else custom_name
+                else:
+                    v_title = ok_title or f"video_{int(time.time())}"
+                v_title = re.sub(r'[\\/*?:"<>|]', '', v_title).strip()
+                target_mp4 = os.path.join(output_dir, f"{v_title}.mp4")
+                
+                dl_headers = {
+                    "User-Agent": STEALTH_HEADERS["User-Agent"],
+                    "Referer": "https://ok.ru/"
+                }
+                
+                logger.info(f"⚡ Launching 32x Multi-Stream Turbo for OK.ru ({humanbytes(total_file_size)})...")
+                try:
+                    await status_msg.edit_text(
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🚀 <b>Turbo Video Stream Engine (32x):</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🎬 <b>Title:</b> <code>{v_title}</code>\n"
+                        f"📊 <b>Size:</b> <code>{humanbytes(total_file_size)}</code>\n"
+                        f"⚡ <b>Full Bandwidth Acceleration Active</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        reply_markup=make_cancel_keyboard(task_id, lang=lang),
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+
+                turbo_success = await download_multi_stream_turbo(
+                    direct_url=direct_mp4_url,
+                    file_path=target_mp4,
+                    total_size=total_file_size,
+                    headers=dl_headers,
+                    status_msg=status_msg,
+                    task_id=task_id,
+                    lang=lang,
+                    dl_start_time=dl_start_time,
+                    last_update=last_update,
+                    num_connections=32
+                )
+                if turbo_success and os.path.exists(target_mp4) and os.path.getsize(target_mp4) > 100 * 1024:
+                    logger.info(f"✅ OK.ru downloaded at maximum speed via Multi-Stream Turbo: {target_mp4}")
+                    return True, target_mp4, os.path.basename(target_mp4)
+        except Exception as ok_err:
+            logger.warning(f"Direct OK.ru Turbo extraction notice: {ok_err}")
+
+    # 2. محرك yt-dlp المتوازي للبثوث المباشرة وباقي المشغلات (HLS, DASH, m3u8)
+    if not YTDLP_AVAILABLE:
+        logger.warning("yt-dlp is not installed!")
+        return False, None, None
 
     if custom_name:
         out_template = os.path.join(output_dir, f"{custom_name}.%(ext)s")
@@ -1768,7 +1888,8 @@ async def download_video_or_m3u8(
             'retries': 5,
             'fragment_retries': 10,
             'skip_unavailable_fragments': True,
-            'concurrent_fragment_downloads': 8,
+            'concurrent_fragment_downloads': 16,
+            'buffersize': 1024 * 1024,
             'socket_timeout': 25,
             'geo_bypass': True,
         }
@@ -1792,69 +1913,6 @@ async def download_video_or_m3u8(
         except Exception as e:
             logger.warning(f"yt-dlp try with ref [{current_ref}] failed: {e}")
             await asyncio.sleep(0.5)
-
-    # محرك طوارئ مباشر لمقاطع OK.ru في حال تعذر المحرك الأساسي
-    if "ok.ru" in video_url or "odnoklassniki.ru" in video_url:
-        try:
-            logger.info("⚡ Activating direct OK.ru stream fallback...")
-            m_ok = re.search(r'(?:ok\.ru/video/|ok\.ru/videoembed/)(\d+)', video_url)
-            clean_embed = f"https://ok.ru/videoembed/{m_ok.group(1)}" if m_ok else video_url
-            
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as fb_session:
-                async with fb_session.get(clean_embed, headers={**STEALTH_HEADERS, "Referer": "https://ok.ru/"}) as fb_resp:
-                    if fb_resp.status == 200:
-                        fb_html = await fb_resp.text(errors="ignore")
-                        m_opts = re.search(r'data-options=(["\'])(.*?)\1', fb_html)
-                        if m_opts:
-                            raw_opts = html.unescape(m_opts.group(2))
-                            opts_data = json.loads(raw_opts)
-                            meta_v = opts_data.get("flashvars", {}).get("metadata")
-                            if isinstance(meta_v, str):
-                                meta_v = json.loads(meta_v)
-                            
-                            direct_v_url = None
-                            if isinstance(meta_v, dict) and "videos" in meta_v and meta_v["videos"]:
-                                q_prio = ["ultra", "quad", "full", "hd", "sd", "low", "lowest", "mobile"]
-                                for q in q_prio:
-                                    for v_cand in meta_v["videos"]:
-                                        if v_cand.get("name") == q and v_cand.get("url"):
-                                            direct_v_url = v_cand.get("url")
-                                            break
-                                    if direct_v_url:
-                                        break
-                                if not direct_v_url and meta_v["videos"]:
-                                    direct_v_url = meta_v["videos"][0].get("url")
-
-                            if direct_v_url:
-                                m_title = meta_v.get("movie", {}).get("title") if isinstance(meta_v, dict) else None
-                                v_title = custom_name or m_title or f"video_{int(time.time())}"
-                                v_title = re.sub(r'[\\/*?:"<>|]', '', v_title).strip()
-                                target_mp4 = os.path.join(output_dir, f"{v_title}.mp4")
-                                
-                                dl_headers = {
-                                    "User-Agent": STEALTH_HEADERS["User-Agent"],
-                                    "Referer": "https://ok.ru/"
-                                }
-                                status_tracker = {"downloaded": 0}
-                                async with fb_session.get(direct_v_url, headers=dl_headers, ssl=False) as stream_resp:
-                                    if stream_resp.status in (200, 206):
-                                        total_b = int(stream_resp.headers.get("Content-Length", 0))
-                                        with open(target_mp4, "wb") as f_out:
-                                            async for chunk in stream_resp.content.iter_chunked(512 * 1024):
-                                                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                                                    return False, None, None
-                                                f_out.write(chunk)
-                                                status_tracker["downloaded"] += len(chunk)
-                                                await progress_bar(
-                                                    status_tracker["downloaded"], total_b,
-                                                    tr(lang, "downloading"), status_msg,
-                                                    dl_start_time, last_update,
-                                                    icon="🎬", task_id=task_id, lang=lang
-                                                )
-                                        if os.path.exists(target_mp4) and os.path.getsize(target_mp4) > 100 * 1024:
-                                            return True, target_mp4, os.path.basename(target_mp4)
-        except Exception as fb_err:
-            logger.warning(f"Direct OK.ru stream fallback notice: {fb_err}")
 
     return False, None, None
 
