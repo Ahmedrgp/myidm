@@ -503,6 +503,8 @@ async def unrestrict_direct_link(url: str) -> str:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
                     headers = {**STEALTH_HEADERS, "Referer": target_ref}
+                    if custom_cookie:
+                        headers["Cookie"] = custom_cookie
                     resp = await session.get(url, headers=headers, allow_redirects=True, stream=True)
                     if resp.status_code == 200:
                         content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
@@ -544,6 +546,32 @@ async def unrestrict_direct_link(url: str) -> str:
     if gdrive_match:
         file_id = gdrive_match.group(1)
         return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    # DocumentaryArea
+    if "documentaryarea.com" in url:
+        try:
+            if CURL_CFFI_AVAILABLE:
+                async with CurlAsyncSession(impersonate="chrome124") as session:
+                    target_page = url
+                    if "player.php" in url:
+                        p_resp = await session.get(url, headers=STEALTH_HEADERS, timeout=15)
+                        if p_resp.status_code == 200:
+                            v_match = re.search(r'href=[\'"](/video/[^\'"]+)[\'"]', p_resp.text)
+                            if v_match:
+                                target_page = "https://www.documentaryarea.com" + v_match.group(1)
+                    
+                    if "video.php" not in target_page:
+                        resp = await session.get(target_page, headers=STEALTH_HEADERS, timeout=15)
+                        if resp.status_code == 200:
+                            m = re.search(r'video\.php\?playback=([a-zA-Z0-9]+)', resp.text)
+                            if m:
+                                playback_hash = m.group(1)
+                                cookies = session.cookies.get_dict()
+                                phpsessid = cookies.get("PHPSESSID", "")
+                                direct_stream = f"https://www.documentaryarea.com/video.php?playback={playback_hash}"
+                                return f"{direct_stream}#ref={urllib.parse.quote(target_page)}&cookie={phpsessid}"
+        except Exception as e:
+            logger.warning(f"documentaryarea error: {e}")
 
     # Catbox
     if "catbox.moe" in url:
@@ -784,6 +812,8 @@ async def probe_command_handler(client: Client, message: Message):
 
         if CURL_CFFI_AVAILABLE:
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
+            if custom_cookie:
+                headers["Cookie"] = custom_cookie
             async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True, stream=True) as session:
                 resp = await session.get(direct_url, headers=headers)
                 status = resp.status_code
@@ -793,6 +823,8 @@ async def probe_command_handler(client: Client, message: Message):
         else:
             timeout = aiohttp.ClientTimeout(total=15, sock_connect=10)
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
+            if custom_cookie:
+                headers["Cookie"] = custom_cookie
             async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
                 async with session.head(direct_url, headers=headers, allow_redirects=True) as resp:
                     status = resp.status
@@ -1629,9 +1661,20 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         direct_url = await unrestrict_direct_link(raw_url)
         parsed_url = urllib.parse.urlparse(direct_url)
         
-        # فرض Referer المناسب تلقائياً لكل سيرفر
-        if "an1.net" in direct_url or "an1.com" in direct_url:
+        custom_cookie = ""
+        if "#ref=" in direct_url:
+            base_part, fragment_part = direct_url.split("#", 1)
+            direct_url = base_part
+            parsed_url = urllib.parse.urlparse(direct_url)
+            params = urllib.parse.parse_qs(fragment_part)
+            if "ref" in params:
+                referer_header = params["ref"][0]
+            if "cookie" in params and params["cookie"][0]:
+                custom_cookie = f"PHPSESSID={params['cookie'][0]}"
+        elif "an1.net" in direct_url or "an1.com" in direct_url:
             referer_header = "https://an1.com/"
+        elif "documentaryarea.com" in direct_url:
+            referer_header = "https://www.documentaryarea.com/"
         else:
             referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
@@ -1686,6 +1729,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         if not download_success and is_speed_throttled_url(direct_url):
             try:
                 headers = {**STEALTH_HEADERS, "Referer": referer_header}
+                if custom_cookie:
+                    headers["Cookie"] = custom_cookie
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as init_session:
                     async with init_session.get(direct_url, headers=headers, allow_redirects=True) as head_resp:
                         if head_resp.status in (200, 206):
@@ -1749,6 +1794,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         break
 
                     headers = {**STEALTH_HEADERS, "Referer": target_ref}
+                    if custom_cookie:
+                        headers["Cookie"] = custom_cookie
                     if status_tracker["downloaded"] > 0:
                         headers["Range"] = f"bytes={status_tracker['downloaded']}-"
 
@@ -1843,6 +1890,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         if not download_success and not ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
+            if custom_cookie:
+                headers["Cookie"] = custom_cookie
             async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
                 async with session.get(direct_url, headers=headers, allow_redirects=True) as response:
                     if response.status not in (200, 206):
