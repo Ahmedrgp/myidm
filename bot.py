@@ -424,31 +424,59 @@ def get_uploader_client():
 # 6. فحص التوقيع الرقمي للبايتات (Binary Magic Bytes Signature Verification)
 # ==========================================
 def is_valid_binary_file(filepath: str) -> tuple:
-    if not os.path.exists(filepath):
+    if not filepath or not os.path.exists(filepath):
         return False, ""
     
     file_size = os.path.getsize(filepath)
-    with open(filepath, "rb") as f:
-        header = f.read(4096)
+    if file_size == 0:
+        return False, ""
 
-    # 1. التوقيع الرقمي لملفات ZIP/APK
-    if header.startswith(b"PK\x03\x04") or header.startswith(b"PK\x05\x06"):
+    try:
+        with open(filepath, "rb") as f:
+            header = f.read(8192)
+    except Exception:
+        return False, ""
+
+    # إذا كان الملف يحتوي على بايتات فارغة (null bytes)، فهو حتماً ملف ثنائي وليس صفحة HTML
+    if b"\x00" in header:
         return True, ""
 
-    # 2. فحص كود HTML العادي
-    header_strip = header.lstrip().lower()
-    if header_strip.startswith((b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--")):
+    # تواقيع الملفات الثنائية المعروفة
+    known_magic = (
+        b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08",  # ZIP, APK, JAR, DOCX, etc.
+        b"\x1f\x8b",                                  # GZIP
+        b"Rar!\x1a\x07",                              # RAR
+        b"7z\xbc\xaf\x27\x1c",                        # 7Z
+        b"%PDF",                                      # PDF
+        b"\xff\xd8\xff",                              # JPEG
+        b"\x89PNG\r\n\x1a\n",                         # PNG
+        b"GIF87a", b"GIF89a",                         # GIF
+        b"RIFF",                                      # WEBP, AVI, WAV
+        b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2",# MP3
+        b"OggS",                                      # OGG
+        b"fLaC",                                      # FLAC
+        b"\x1aE\xdf\xa3",                             # MKV, WEBM
+        b"MZ",                                        # EXE, DLL
+        b"\x7fELF",                                   # Linux ELF
+    )
+    if any(header.startswith(sig) for sig in known_magic):
+        return True, ""
+
+    # فحص صريح لنصوص HTML
+    header_lower = header.lstrip().lower()
+    html_signatures = (
+        b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--",
+        b"<body", b"<div", b"<title"
+    )
+    if any(header_lower.startswith(sig) for sig in html_signatures) or (b"<html" in header_lower[:1024]):
         try:
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
                 return False, f_full.read(300 * 1024)
         except Exception:
             return False, header.decode("utf-8", errors="ignore")
 
-    # إذا كان حجم الملف أكبر من 1 ميجابايت، فهو ثنائي سليم 100%
-    if file_size > 1 * 1024 * 1024:
-        return True, ""
-
-    return False, header.decode("utf-8", errors="ignore")
+    # إذا لم يكن يحتوي على وسوم HTML، فهو ملف صالح (مثل ملفات نصية، ترجمات srt، كود، إلخ)
+    return True, ""
 
 def extract_video_embed_from_html(html_text: str, original_url: str) -> tuple:
     """استخراج مشغلات وسيرفرات الفيديو المضمنة في صفحات المشاهدة (مثل AhwakTV، FaselHD، وغيرها)"""
@@ -1985,6 +2013,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 referer_header = "https://an1.com/"
             elif "documentaryarea.com" in direct_url:
                 referer_header = "https://www.documentaryarea.com/"
+            elif "devuploads.com" in direct_url:
+                referer_header = "https://devuploads.com/"
             else:
                 referer_header = f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
@@ -2163,15 +2193,6 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                         status_tracker["downloaded"] += len(chunk)
                                         last_chunk_time = time.time()
                                         
-                                        # فحص ديناميكي: إذا كانت سرعة السيرفر بطيئة ومقيدة (<1MB/s) بعد 5 ثوانٍ، تشغيل التيربو فوراً
-                                        elapsed = time.time() - dl_start_time
-                                        if elapsed > 5.0 and total_size > 15 * 1024 * 1024 and status_tracker["downloaded"] > 0:
-                                            current_rate = status_tracker["downloaded"] / elapsed
-                                            if current_rate < 1.0 * 1024 * 1024 and not is_speed_throttled_url(direct_url):
-                                                logger.info(f"⚡ Host throttled at {humanbytes(current_rate)}/s (<1MB/s) -> Auto-switching to Multi-Stream Turbo!")
-                                                stalled = True
-                                                break
-                                                
                                         await progress_bar(
                                             status_tracker["downloaded"],
                                             total_size,
@@ -2184,8 +2205,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                             lang=lang
                                         )
                                     
-                                    if (time.time() - last_chunk_time) > 5.0:
-                                        logger.warning(f"⚠️ Stream stalled for 5s. Auto-Resuming from byte {status_tracker['downloaded']}...")
+                                    if (time.time() - last_chunk_time) > 15.0:
+                                        logger.warning(f"⚠️ Stream stalled for 15s. Auto-Resuming from byte {status_tracker['downloaded']}...")
                                         stalled = True
                                         break
 
@@ -2237,9 +2258,19 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                     task_id=task_id,
                                     lang=lang
                                 )
+                    download_success = True
         
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
-        
+
+        if not file_path or not os.path.exists(file_path) or actual_file_size == 0:
+            await status_msg.edit_text(
+                "❌ <b>Download Failed:</b>\n"
+                "<code>The server was unable to retrieve data from this host.</code>\n\n"
+                "💡 <i>The link may be expired, IP-locked, or blocked by host firewall.</i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
         # =========================================================================
         # فحص التوقيع البنائي المزدوج مع دعم محرك System CURL الخارق
         # =========================================================================
@@ -2274,8 +2305,19 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg, hop_count=hop_count+1)
                 return
             else:
-                await status_msg.edit_text("❌ <b>URL is an HTML webpage, not a direct file link!</b>", parse_mode=ParseMode.HTML)
+                page_title = ""
+                m_t = re.search(r'<title>(.*?)</title>', html_sample, re.IGNORECASE | re.DOTALL)
+                if m_t:
+                    page_title = re.sub(r'\s+', ' ', m_t.group(1)).strip()[:100]
+                err_detail = f"\n📄 <b>Page Title:</b> <code>{page_title}</code>" if page_title else ""
+                await status_msg.edit_text(
+                    f"❌ <b>URL is an HTML webpage, not a direct file link!</b>{err_detail}\n\n"
+                    f"💡 <i>Make sure the link is a valid direct link and not expired or IP-locked.</i>",
+                    parse_mode=ParseMode.HTML
+                )
                 return
+
+        actual_file_size = os.path.getsize(file_path)
 
         BOT_LIMIT_BYTES = 1950 * 1024 * 1024      # 1.95 GB الحد الأقصى المطلق للبوت لتفادي خطأ 2000 MiB
         SPLIT_CHUNK_BYTES = 1900 * 1024 * 1024    # 1.90 GB
