@@ -22,9 +22,17 @@ import sqlite3
 import zipfile
 import urllib.parse
 import html
+import hashlib
+import shutil
 from dotenv import load_dotenv
 import aiohttp
 from aiohttp import web
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
 from pyrogram.enums import ParseMode
@@ -78,6 +86,7 @@ API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 PORT = int(os.environ.get("PORT", 8080))
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 0)) if os.environ.get("ADMIN_ID", "").strip().isdigit() else 0
 
 USER_SESSION_STRING = (os.environ.get("USER_SESSION_STRING", "") or os.environ.get("PREMIUM_SESSION", "")).strip().strip("'\"")
 
@@ -88,8 +97,11 @@ else:
     MAX_SINGLE_FILE_SIZE = 2000 * 1024 * 1024  # 2,000 MB (~2 GB Bot Limit)
     SPLIT_PART_SIZE = 1950 * 1024 * 1024      # 1.95 GB
 
-DOWNLOAD_DIR = "/tmp" if os.path.exists("/tmp") else tempfile.gettempdir()
+BASE_TMP = "/tmp" if os.path.exists("/tmp") else tempfile.gettempdir()
+DOWNLOAD_DIR = os.path.join(BASE_TMP, "ctele_downloads")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 START_TIME = time.time()
+DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET") or hashlib.sha256(f"{API_HASH}_{BOT_TOKEN}".encode()).hexdigest()[:16]
 DB_FILE = "bot_database.db"
 
 STEALTH_HEADERS = {
@@ -147,6 +159,12 @@ TEXTS = {
         "btn_mode_auto": "🎬 وضع الرفع: تلقائي",
         "btn_mode_doc": "📄 وضع الرفع: مستند دائم",
         "btn_threads": "⚡ التسريع: {threads}x Workers",
+        "btn_caption_on": "📝 الوصف: مفعل ✅",
+        "btn_caption_off": "📝 الوصف: معطل ❌",
+        "btn_thumbs_on": "🖼️ المعاينة والمصغرات: مفعلة ✅",
+        "btn_thumbs_off": "🖼️ المعاينة والمصغرات: معطلة ❌",
+        "btn_cleantags_on": "🧹 تنظيف الإعلانات: مفعل ✅",
+        "btn_cleantags_off": "🧹 تنظيف الإعلانات: معطل ❌",
         "transfer_rate": "🚀 معدل النقل الخارق:",
         "processed_size": "📦 الحجم المعالج:",
         "eta": "⏱️ الوقت المتبقي:",
@@ -165,9 +183,10 @@ TEXTS = {
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "1. <b>الروابط المباشرة:</b> أرسل رابط الملف المباشر هنا\n"
             "2. <b>روابط التورينت (Magnet):</b> أرسل رابط <code>magnet:?xt=...</code>\n"
-            "3. <b>ملفات التورينت:</b> أرسل ملف <code>.torrent</code> مباشرة هنا!\n\n"
-            "📝 <b>خيارات التسمية الاختيارية:</b>\n"
-            "• <code>الرابط | اسم مخصص</code>\n"
+            "3. <b>ملفات التورينت:</b> أرسل ملف <code>.torrent</code> مباشرة هنا!\n"
+            "4. <b>حزمة ZIP مجمعة:</b> أرسل كلمة <code>[ZIP]</code> في السطر الأول ثم الروابط في الأسطر التالية لدمجها تلقائياً في ملف ZIP واحد!\n\n"
+            "📝 <b>خيارات التسمية والكابشن المخصص:</b>\n"
+            "• <code>الرابط | اسم مخصص | وصف مخصص</code>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
     },
@@ -214,6 +233,12 @@ TEXTS = {
         "btn_mode_auto": "🎬 Upload Mode: Auto Media",
         "btn_mode_doc": "📄 Upload Mode: Document",
         "btn_threads": "⚡ Acceleration: {threads}x Workers",
+        "btn_caption_on": "📝 Caption: Enabled ✅",
+        "btn_caption_off": "📝 Caption: Disabled ❌",
+        "btn_thumbs_on": "🖼️ Thumbnails: Enabled ✅",
+        "btn_thumbs_off": "🖼️ Thumbnails: Disabled ❌",
+        "btn_cleantags_on": "🧹 Clean Ads & Tags: Enabled ✅",
+        "btn_cleantags_off": "🧹 Clean Ads & Tags: Disabled ❌",
         "transfer_rate": "🚀 Transfer Speed:",
         "processed_size": "📦 Processed Data:",
         "eta": "⏱️ Time Remaining:",
@@ -232,9 +257,10 @@ TEXTS = {
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "1. <b>Direct Links:</b> Send any direct HTTP/HTTPS URL\n"
             "2. <b>Torrent Magnets:</b> Send <code>magnet:?xt=...</code>\n"
-            "3. <b>Torrent Files:</b> Send any <code>.torrent</code> file directly!\n\n"
-            "📝 <b>Custom Naming:</b>\n"
-            "• <code>URL | Custom_Name.ext</code>\n"
+            "3. <b>Torrent Files:</b> Send any <code>.torrent</code> file directly!\n"
+            "4. <b>Bulk ZIP Bundle:</b> Send <code>[ZIP]</code> as the first line, then list URLs to bundle them into a single ZIP archive!\n\n"
+            "📝 <b>Custom Naming & Captions:</b>\n"
+            "• <code>URL | Custom_Name.ext | Custom_Caption</code>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
     }
@@ -243,9 +269,16 @@ TEXTS = {
 # ==========================================
 # 3. إدارة وتحديث قاعدة البيانات الدائمة
 # ==========================================
+ALLOWED_USER_SETTINGS = {"upload_mode", "enable_thumbs", "enable_caption", "fast_speed", "god_threads", "lang", "clean_tags", "custom_prefix", "custom_suffix"}
+
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -258,7 +291,10 @@ def init_db():
             enable_caption INTEGER DEFAULT 1,
             fast_speed INTEGER DEFAULT 1,
             god_threads INTEGER DEFAULT 64,
-            lang TEXT DEFAULT 'ar'
+            lang TEXT DEFAULT 'ar',
+            clean_tags INTEGER DEFAULT 1,
+            custom_prefix TEXT DEFAULT '',
+            custom_suffix TEXT DEFAULT ''
         )
     """)
     
@@ -280,16 +316,27 @@ def init_db():
             val_float REAL DEFAULT 0.0
         )
     """)
-    
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN god_threads INTEGER DEFAULT 64")
-    except sqlite3.OperationalError:
-        pass
 
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'ar'")
-    except sqlite3.OperationalError:
-        pass
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS custom_replacements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            find_text TEXT,
+            replace_text TEXT
+        )
+    """)
+    
+    for col, col_def in [
+        ("god_threads", "INTEGER DEFAULT 64"),
+        ("lang", "TEXT DEFAULT 'ar'"),
+        ("clean_tags", "INTEGER DEFAULT 1"),
+        ("custom_prefix", "TEXT DEFAULT ''"),
+        ("custom_suffix", "TEXT DEFAULT ''")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
+        except sqlite3.OperationalError:
+            pass
 
     try:
         cursor.execute("ALTER TABLE history ADD COLUMN category TEXT DEFAULT '📁 عام'")
@@ -300,7 +347,7 @@ def init_db():
     conn.close()
 
 def db_add_user(user_id: int, username: str, first_name: str):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     cursor.execute("""
         INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at)
@@ -310,10 +357,14 @@ def db_add_user(user_id: int, username: str, first_name: str):
     conn.close()
 
 def db_get_user_settings(user_id: int) -> dict:
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT upload_mode, enable_thumbs, enable_caption, fast_speed, god_threads, lang FROM users WHERE user_id = ?", (user_id,))
+        cursor.execute("""
+            SELECT upload_mode, enable_thumbs, enable_caption, fast_speed, god_threads, lang,
+                   clean_tags, custom_prefix, custom_suffix
+            FROM users WHERE user_id = ?
+        """, (user_id,))
         row = cursor.fetchone()
     except sqlite3.OperationalError:
         row = None
@@ -321,23 +372,75 @@ def db_get_user_settings(user_id: int) -> dict:
     if row:
         return {
             "upload_mode": row[0],
-            "enable_thumbs": row[1],
-            "enable_caption": row[2],
-            "fast_speed": row[3],
+            "enable_thumbs": row[1] if row[1] is not None else 1,
+            "enable_caption": row[2] if row[2] is not None else 1,
+            "fast_speed": row[3] if row[3] is not None else 1,
             "god_threads": row[4] or 64,
-            "lang": row[5] or "ar"
+            "lang": row[5] or "ar",
+            "clean_tags": row[6] if row[6] is not None else 1,
+            "custom_prefix": row[7] or "",
+            "custom_suffix": row[8] or ""
         }
-    return {"upload_mode": "auto", "enable_thumbs": 1, "enable_caption": 1, "fast_speed": 1, "god_threads": 64, "lang": "ar"}
+    return {
+        "upload_mode": "auto",
+        "enable_thumbs": 1,
+        "enable_caption": 1,
+        "fast_speed": 1,
+        "god_threads": 64,
+        "lang": "ar",
+        "clean_tags": 1,
+        "custom_prefix": "",
+        "custom_suffix": ""
+    }
+
+def db_add_replacement(user_id: int, find_text: str, replace_text: str):
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO custom_replacements (user_id, find_text, replace_text)
+        VALUES (?, ?, ?)
+    """, (user_id, find_text, replace_text))
+    conn.commit()
+    conn.close()
+
+def db_get_user_replacements(user_id: int) -> list:
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cursor.execute("SELECT find_text, replace_text FROM custom_replacements WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def db_clear_user_replacements(user_id: int):
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM custom_replacements WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def db_get_total_users_count() -> int:
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        cnt = cursor.fetchone()[0]
+        conn.close()
+        return cnt
+    except Exception:
+        return 0
 
 def db_update_user_setting(user_id: int, key: str, val):
-    conn = sqlite3.connect(DB_FILE)
+    if key not in ALLOWED_USER_SETTINGS:
+        logger.warning(f"Rejected attempt to update unauthorized setting: {key}")
+        return
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     cursor.execute(f"UPDATE users SET {key} = ? WHERE user_id = ?", (val, user_id))
     conn.commit()
     conn.close()
 
 def db_add_history(user_id: int, filename: str, size: int, category: str):
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO history (user_id, filename, size, category, timestamp) VALUES (?, ?, ?, ?, ?)",
                    (user_id, filename, size, category, time.time()))
@@ -345,7 +448,7 @@ def db_add_history(user_id: int, filename: str, size: int, category: str):
     conn.close()
 
 def db_get_history(user_id: int, limit: int = 10) -> list:
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT filename, size, category, timestamp FROM history WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit))
@@ -355,8 +458,19 @@ def db_get_history(user_id: int, limit: int = 10) -> list:
     conn.close()
     return rows
 
+def db_get_all_user_ids() -> list:
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT user_id FROM users")
+        rows = cursor.fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    conn.close()
+    return [r[0] for r in rows if r[0]]
+
 def db_get_global_stats() -> dict:
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
@@ -383,9 +497,354 @@ request_queue = asyncio.Queue()
 async def handle_health_check(request):
     return web.Response(text="⚡ OMNIPOTENT OVERLORD ENGINE - ABSOLUTE POWER 100%")
 
+DASHBOARD_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ OMNIPOTENT OVERLORD | Live Monitor & Dashboard</title>
+    <style>
+        :root {
+            --bg-base: #090d16;
+            --bg-card: #111827;
+            --border: #1f293d;
+            --cyan: #00f0ff;
+            --purple: #8b5cf6;
+            --green: #10b981;
+            --red: #ef4444;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+        body { background: var(--bg-base); color: var(--text-main); min-height: 100vh; padding: 24px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }
+        .logo-box { display: flex; align-items: center; gap: 12px; }
+        .logo-icon { font-size: 28px; filter: drop-shadow(0 0 10px rgba(0,240,255,0.6)); }
+        .logo-title { font-size: 22px; font-weight: 800; background: linear-gradient(135deg, #00f0ff, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .status-badge { display: inline-flex; align-items: center; gap: 8px; background: rgba(16, 185, 129, 0.15); color: var(--green); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .status-dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; margin-bottom: 24px; }
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 20px; position: relative; overflow: hidden; transition: transform 0.2s, border-color 0.2s; }
+        .card:hover { transform: translateY(-2px); border-color: rgba(0,240,255,0.3); }
+        .card-title { font-size: 13px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .card-value { font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 8px; }
+        .card-sub { font-size: 12px; color: var(--text-muted); }
+        .progress-bar-bg { width: 100%; height: 6px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; margin-top: 10px; }
+        .progress-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+        .fill-cyan { background: linear-gradient(90deg, #00f0ff, #3b82f6); }
+        .fill-purple { background: linear-gradient(90deg, #8b5cf6, #ec4899); }
+        .fill-green { background: linear-gradient(90deg, #10b981, #00f0ff); }
+        .fill-orange { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+        .chart-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; margin-bottom: 24px; }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+        .chart-legend { display: flex; gap: 16px; font-size: 13px; }
+        .legend-item { display: flex; align-items: center; gap: 6px; }
+        .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+        canvas { width: 100%; height: 200px; display: block; border-radius: 8px; }
+        .tasks-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+        .table-wrap { overflow-x: auto; margin-top: 14px; }
+        table { width: 100%; border-collapse: collapse; text-align: right; font-size: 14px; }
+        th { padding: 12px 16px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); font-size: 13px; }
+        td { padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle; }
+        .empty-tasks { text-align: center; padding: 36px 16px; color: var(--text-muted); font-size: 14px; }
+        .btn-cancel-task { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
+        .btn-cancel-task:hover { background: #ef4444; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo-box">
+                <span class="logo-icon">⚡</span>
+                <div>
+                    <h1 class="logo-title">OMNIPOTENT OVERLORD ENGINE</h1>
+                    <div style="font-size: 12px; color: var(--text-muted);">نظام المراقبة الحية والتحكم في الخادم والمهام</div>
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 14px;">
+                <div class="status-badge"><span class="status-dot"></span> متصل ويعمل بنشاط</div>
+                <div id="uptime_disp" style="font-size: 13px; color: var(--text-muted);">تشغيل: 0s</div>
+            </div>
+        </header>
+
+        <div class="grid">
+            <div class="card">
+                <div class="card-title"><span>استهلاك المعالج (CPU)</span><span>⚡</span></div>
+                <div class="card-value" id="cpu_val">0.0%</div>
+                <div class="card-sub" id="cpu_sub">معدل التحميل الحقيقي</div>
+                <div class="progress-bar-bg"><div class="progress-bar-fill fill-cyan" id="cpu_bar" style="width: 0%;"></div></div>
+            </div>
+            <div class="card">
+                <div class="card-title"><span>الذاكرة العشوائية (RAM)</span><span>🧠</span></div>
+                <div class="card-value" id="ram_val">0 MB</div>
+                <div class="card-sub" id="ram_sub">المستخدم من الإجمالي</div>
+                <div class="progress-bar-bg"><div class="progress-bar-fill fill-purple" id="ram_bar" style="width: 0%;"></div></div>
+            </div>
+            <div class="card">
+                <div class="card-title"><span>المساحة التخزينية (Disk)</span><span>💾</span></div>
+                <div class="card-value" id="disk_val">0 GB</div>
+                <div class="card-sub" id="disk_sub">المساحة المتوفرة</div>
+                <div class="progress-bar-bg"><div class="progress-bar-fill fill-green" id="disk_bar" style="width: 0%;"></div></div>
+            </div>
+            <div class="card">
+                <div class="card-title"><span>المهام وطابور المعالجة</span><span>⏳</span></div>
+                <div class="card-value" id="tasks_val">0 / 0</div>
+                <div class="card-sub" id="tasks_sub">0 مهام نشطة | 0 في الانتظار</div>
+                <div class="progress-bar-bg"><div class="progress-bar-fill fill-orange" id="tasks_bar" style="width: 0%;"></div></div>
+            </div>
+            <div class="card">
+                <div class="card-title"><span>البيانات المعالجة التراكمية</span><span>📊</span></div>
+                <div class="card-value" id="data_val">0 B</div>
+                <div class="card-sub" id="files_sub">0 ملفات مكتملة بالكامل</div>
+            </div>
+            <div class="card">
+                <div class="card-title"><span>المستخدمون المسجلون</span><span>👥</span></div>
+                <div class="card-value" id="users_val">0</div>
+                <div class="card-sub">قاعدة بيانات SQLite المحلية</div>
+            </div>
+        </div>
+
+        <div class="chart-card">
+            <div class="chart-header">
+                <div style="font-size: 15px; font-weight: 700;">📈 مخطط الأداء الحي والضغط اللحظي (Live Telemetry)</div>
+                <div class="chart-legend">
+                    <div class="legend-item"><div class="legend-color" style="background: var(--cyan);"></div><span>المعالج (CPU %)</span></div>
+                    <div class="legend-item"><div class="legend-color" style="background: var(--purple);"></div><span>الذاكرة (RAM %)</span></div>
+                </div>
+            </div>
+            <canvas id="liveChart"></canvas>
+        </div>
+
+        <div class="tasks-card">
+            <div style="font-size: 15px; font-weight: 700; margin-bottom: 6px;">🚀 المهام الجارية في الوقت الفعلي (Active Tasks)</div>
+            <div style="font-size: 13px; color: var(--text-muted);">جميع عمليات التحميل والرفع المباشر والتورينت الجارية الآن:</div>
+            <div class="table-wrap">
+                <table id="tasksTable">
+                    <thead>
+                        <tr>
+                            <th>معرف المهمة (Task ID)</th>
+                            <th>الملف / المصدر</th>
+                            <th>التقدم</th>
+                            <th>السرعة</th>
+                            <th>الحالة</th>
+                            <th>إجراء</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tasksBody">
+                        <tr><td colspan="6" class="empty-tasks">⚡ لا توجد أي مهام تحميل أو رفع جارية حالياً (السيرفر في وضع الاستعداد).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SECRET_KEY = "__SECRET_KEY__";
+        const cpuHistory = new Array(30).fill(0);
+        const ramHistory = new Array(30).fill(0);
+
+        const canvas = document.getElementById('liveChart');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth - 44;
+            canvas.height = 200;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function drawChart() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Grid lines
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+            ctx.lineWidth = 1;
+            for (let y = 0; y <= 100; y += 25) {
+                const py = canvas.height - (y / 100) * canvas.height;
+                ctx.beginPath();
+                ctx.moveTo(0, py);
+                ctx.lineTo(canvas.width, py);
+                ctx.stroke();
+            }
+
+            function drawLine(data, color) {
+                ctx.beginPath();
+                const step = canvas.width / (data.length - 1);
+                data.forEach((val, i) => {
+                    const x = i * step;
+                    const y = canvas.height - (val / 100) * canvas.height;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                });
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+            }
+
+            drawLine(cpuHistory, '#00f0ff');
+            drawLine(ramHistory, '#a855f7');
+        }
+
+        async function fetchStats() {
+            try {
+                const res = await fetch(`/api/dashboard/stats?key=${SECRET_KEY}`);
+                if (!res.ok) return;
+                const d = await res.json();
+
+                document.getElementById('cpu_val').innerText = d.cpu_percent + '%';
+                document.getElementById('cpu_bar').style.width = Math.min(d.cpu_percent, 100) + '%';
+
+                document.getElementById('ram_val').innerText = d.ram_used_mb + ' MB';
+                document.getElementById('ram_sub').innerText = `${d.ram_used_mb} MB من ${d.ram_total_mb} MB (${d.ram_percent}%)`;
+                document.getElementById('ram_bar').style.width = Math.min(d.ram_percent, 100) + '%';
+
+                document.getElementById('disk_val').innerText = d.disk_free_gb + ' GB';
+                document.getElementById('disk_sub').innerText = `${d.disk_used_gb} GB مستخدم من ${d.disk_total_gb} GB (${d.disk_percent}%)`;
+                document.getElementById('disk_bar').style.width = Math.min(d.disk_percent, 100) + '%';
+
+                document.getElementById('tasks_val').innerText = `${d.active_tasks_count} / ${d.queue_size}`;
+                document.getElementById('tasks_sub').innerText = `${d.active_tasks_count} مهام نشطة | ${d.queue_size} في الانتظار`;
+                document.getElementById('tasks_bar').style.width = Math.min((d.active_tasks_count + d.queue_size) * 20, 100) + '%';
+
+                document.getElementById('data_val').innerText = d.total_bytes_human;
+                document.getElementById('files_sub').innerText = `${d.total_files} ملفات مكتملة بالكامل`;
+                document.getElementById('users_val').innerText = d.total_users;
+                document.getElementById('uptime_disp').innerText = 'تشغيل: ' + d.uptime_formatted;
+
+                cpuHistory.shift();
+                cpuHistory.push(d.cpu_percent);
+                ramHistory.shift();
+                ramHistory.push(d.ram_percent);
+                drawChart();
+
+                const tbody = document.getElementById('tasksBody');
+                if (!d.active_tasks || d.active_tasks.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-tasks">⚡ لا توجد أي مهام تحميل أو رفع جارية حالياً (السيرفر في وضع الاستعداد).</td></tr>';
+                } else {
+                    let html = '';
+                    d.active_tasks.forEach(t => {
+                        html += `<tr>
+                            <td><code>${t.task_id}</code></td>
+                            <td><b>${t.filename}</b></td>
+                            <td>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <div style="flex:1; height:6px; background:rgba(255,255,255,0.1); border-radius:3px;">
+                                        <div style="width:${t.progress}%; height:100%; background:var(--cyan); border-radius:3px;"></div>
+                                    </div>
+                                    <span>${t.progress}%</span>
+                                </div>
+                            </td>
+                            <td><span style="color:var(--cyan); font-weight:600;">${t.speed}</span></td>
+                            <td><span style="color:${t.cancelled ? 'var(--red)' : 'var(--green)'}; font-weight:600;">${t.cancelled ? 'ملغاة' : 'نشطة'}</span></td>
+                            <td><button class="btn-cancel-task" onclick="cancelTask('${t.task_id}')">🛑 إلغاء</button></td>
+                        </tr>`;
+                    });
+                    tbody.innerHTML = html;
+                }
+            } catch (err) {
+                console.error("Dashboard poll error:", err);
+            }
+        }
+
+        async function cancelTask(taskId) {
+            if (!confirm(`هل أنت متأكد من إلغاء المهمة ${taskId}؟`)) return;
+            try {
+                await fetch(`/api/dashboard/cancel?key=${SECRET_KEY}&task_id=${taskId}`, { method: 'POST' });
+                fetchStats();
+            } catch(e) {}
+        }
+
+        setInterval(fetchStats, 2000);
+        fetchStats();
+    </script>
+</body>
+</html>
+"""
+
+async def handle_dashboard_view(request):
+    key = request.query.get("key", "")
+    if key != DASHBOARD_SECRET:
+        return web.Response(
+            text="""<!DOCTYPE html><html><head><meta charset="utf-8"><title>403 Access Denied</title>
+            <style>body{background:#0a0e17;color:#ef4444;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}
+            .card{background:#111827;padding:30px;border-radius:12px;border:1px solid #ef4444;text-align:center;}
+            h1{margin:0 0 10px;font-size:24px;}p{color:#9ca3af;font-size:14px;}</style></head>
+            <body><div class="card"><h1>⛔ 403 Forbidden</h1><p>Invalid or missing dashboard security key.</p></div></body></html>""",
+            status=403,
+            content_type="text/html"
+        )
+    return web.Response(text=DASHBOARD_HTML_TEMPLATE.replace("__SECRET_KEY__", DASHBOARD_SECRET), content_type="text/html")
+
+async def handle_dashboard_stats_api(request):
+    key = request.query.get("key", "")
+    if key != DASHBOARD_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=403)
+
+    cpu = psutil.cpu_percent(interval=None) if PSUTIL_AVAILABLE else 0.0
+    vmem = psutil.virtual_memory() if PSUTIL_AVAILABLE else None
+    ram_used = round(vmem.used / (1024 * 1024)) if vmem else 0
+    ram_total = round(vmem.total / (1024 * 1024)) if vmem else 0
+    ram_percent = vmem.percent if vmem else 0.0
+
+    disk = shutil.disk_usage(DOWNLOAD_DIR)
+    disk_free_gb = round(disk.free / (1024**3), 1)
+    disk_total_gb = round(disk.total / (1024**3), 1)
+    disk_used_gb = round((disk.total - disk.free) / (1024**3), 1)
+    disk_percent = round((disk.total - disk.free) / disk.total * 100, 1)
+
+    uptime_sec = int(time.time() - START_TIME)
+    g_stats = db_get_global_stats()
+    total_users = db_get_total_users_count()
+
+    tasks_data = []
+    for tid, tinfo in list(ACTIVE_TASKS.items()):
+        tasks_data.append({
+            "task_id": tid,
+            "cancelled": tinfo.get("cancelled", False),
+            "filename": tinfo.get("filename", "Active Job"),
+            "progress": tinfo.get("progress", 0),
+            "speed": tinfo.get("speed", "0 B/s")
+        })
+
+    return web.json_response({
+        "status": "online",
+        "cpu_percent": cpu,
+        "ram_used_mb": ram_used,
+        "ram_total_mb": ram_total,
+        "ram_percent": ram_percent,
+        "disk_free_gb": disk_free_gb,
+        "disk_total_gb": disk_total_gb,
+        "disk_used_gb": disk_used_gb,
+        "disk_percent": disk_percent,
+        "uptime_seconds": uptime_sec,
+        "uptime_formatted": time_formatter(uptime_sec),
+        "active_tasks_count": len(ACTIVE_TASKS),
+        "queue_size": request_queue.qsize(),
+        "total_users": total_users,
+        "total_files": g_stats.get("files", 0),
+        "total_bytes": g_stats.get("bytes", 0),
+        "total_bytes_human": humanbytes(g_stats.get("bytes", 0)),
+        "active_tasks": tasks_data
+    })
+
+async def handle_dashboard_cancel_task_api(request):
+    key = request.query.get("key", "")
+    if key != DASHBOARD_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=403)
+    tid = request.query.get("task_id", "")
+    if tid in ACTIVE_TASKS:
+        ACTIVE_TASKS[tid]["cancelled"] = True
+        return web.json_response({"success": True, "task_id": tid, "status": "cancelled"})
+    return web.json_response({"success": False, "error": "not_found"})
+
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle_health_check)
+    app.router.add_get("/dashboard", handle_dashboard_view)
+    app.router.add_get("/api/dashboard/stats", handle_dashboard_stats_api)
+    app.router.add_post("/api/dashboard/cancel", handle_dashboard_cancel_task_api)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
@@ -558,6 +1017,15 @@ def extract_real_download_link_from_html(html_text: str, original_url: str) -> s
     if not html_text:
         return ""
 
+    # فحص روابط تأكيد التحميل لملفات Google Drive الكبيرة
+    if "drive.google.com" in original_url or "drive.usercontent.google.com" in original_url:
+        g_confirm = re.search(r'href=["\'](/uc\?export=download&[^"\']+)["\']', html_text)
+        if g_confirm:
+            return "https://drive.google.com" + html.unescape(g_confirm.group(1))
+        g_confirm2 = re.search(r'href=["\'](https://drive\.usercontent\.google\.com/download\?[^"\']+)["\']', html_text)
+        if g_confirm2:
+            return html.unescape(g_confirm2.group(1))
+
     # فحص مشغلات الفيديو وسيرفرات الأفلام أولاً
     video_embed, video_title = extract_video_embed_from_html(html_text, original_url)
     if video_embed:
@@ -590,10 +1058,117 @@ def extract_real_download_link_from_html(html_text: str, original_url: str) -> s
 
     return ""
 
+async def unrestrict_terabox(url: str) -> tuple:
+    """فك تشفير واستخراج رابط التنزيل المباشر واسم الملف من TeraBox تلقائياً"""
+    try:
+        m = re.search(r'(?:surl=|/s/|/share/init\?surl=)([a-zA-Z0-9_-]+)', url)
+        if not m:
+            return url, None
+        raw_id = m.group(1)
+        clean_id = raw_id[1:] if raw_id.startswith("1") else raw_id
+        
+        api_endpoints = [
+            f"https://terabox-downloader.online/api/get-info?shorturl={clean_id}",
+            f"https://yt-api.org/api/terabox?url={urllib.parse.quote(url)}",
+            f"https://terabox-api.online/api?url={urllib.parse.quote(url)}"
+        ]
+        
+        headers = {**STEALTH_HEADERS, "Referer": "https://www.terabox.com/"}
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=8)) as session:
+            for api in api_endpoints:
+                try:
+                    async with session.get(api, headers=headers) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if isinstance(data, dict):
+                                if "list" in data and len(data["list"]) > 0:
+                                    item = data["list"][0]
+                                    dlink = item.get("dlink") or item.get("download_link") or item.get("direct_link")
+                                    fname = item.get("server_filename") or item.get("filename")
+                                    if dlink:
+                                        return dlink, fname
+                                dlink = data.get("download_link") or data.get("dlink") or data.get("direct_link") or data.get("url")
+                                fname = data.get("file_name") or data.get("filename")
+                                if dlink and isinstance(dlink, str) and dlink.startswith("http"):
+                                    return dlink, fname
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning(f"terabox resolver error: {e}")
+    return url, None
+
+async def unrestrict_1fichier(url: str) -> str:
+    """تجاوز صفحة الانتظار واستخراج رابط التحميل المباشر لـ 1Fichier"""
+    try:
+        clean_url = url.split('&')[0]
+        headers = {
+            **STEALTH_HEADERS,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": clean_url
+        }
+        data = {"did": "0"}
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.post(clean_url, headers=headers, data=data, allow_redirects=True) as resp:
+                if resp.status == 200:
+                    text = await resp.text(errors="ignore")
+                    m = re.search(r'href=["\'](https?://[a-zA-Z0-9-]+\.1fichier\.com/[^"\'>\s]+)["\']', text)
+                    if m:
+                        return m.group(1)
+                    m_btn = re.search(r'<a[^>]+class=["\'][^"\']*btn-general[^"\']*["\'][^>]+href=["\']([^"\']+)["\']', text)
+                    if m_btn:
+                        return m_btn.group(1)
+    except Exception as e:
+        logger.warning(f"1fichier resolver error: {e}")
+    return url
+
+async def unrestrict_mega(url: str) -> tuple:
+    """فك روابط Mega.nz واستخراج الرابط المباشر السحابي"""
+    try:
+        api_url = f"https://megadl.hazex.workers.dev/?url={urllib.parse.quote(url)}"
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=8)) as session:
+            async with session.get(api_url, headers=STEALTH_HEADERS) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if isinstance(data, dict):
+                        dlink = data.get("url") or data.get("download_url")
+                        fname = data.get("filename") or data.get("file_name")
+                        if dlink:
+                            return dlink, fname
+    except Exception as e:
+        logger.warning(f"mega resolver error: {e}")
+    return url, None
+
 # ==========================================
 # 7. مستخرج ومفكك الروابط المطلق مع محاكاة الـ Referer المباشرة
 # ==========================================
 async def unrestrict_direct_link(url: str) -> str:
+    # TeraBox & Affiliated Domains
+    terabox_domains = ["terabox.com", "teraboxapp.com", "1024tera.com", "mirrobox.com", "nephobox.com", "freeterabox.com", "terasharelink.com", "terabox.link", "4funbox.com"]
+    if any(d in url.lower() for d in terabox_domains):
+        direct_tb, tb_name = await unrestrict_terabox(url)
+        if direct_tb and direct_tb != url:
+            if tb_name:
+                return f"{direct_tb}#title={urllib.parse.quote(tb_name)}"
+            return direct_tb
+
+    # 1Fichier & Mirrored Domains
+    fichier_domains = ["1fichier.com", "alterupload.com", "cjoint.net", "desfichiers.com", "megadl.fr"]
+    if any(d in url.lower() for d in fichier_domains):
+        direct_1f = await unrestrict_1fichier(url)
+        if direct_1f and direct_1f != url:
+            return direct_1f
+
+    # Mega.nz / Mega.co.nz
+    if "mega.nz" in url.lower() or "mega.co.nz" in url.lower():
+        direct_mega, mega_name = await unrestrict_mega(url)
+        if direct_mega and direct_mega != url:
+            if mega_name:
+                return f"{direct_mega}#title={urllib.parse.quote(mega_name)}"
+            return direct_mega
+
     # Mediafire
     if "mediafire.com" in url:
         try:
@@ -621,6 +1196,12 @@ async def unrestrict_direct_link(url: str) -> str:
     # AN1 (an1.net / an1.com / files.an1.net) مع فرض Referer المباشر
     if "an1.net" in url or "an1.com" in url:
         target_ref = "https://an1.com/"
+        custom_cookie = ""
+        if "#" in url:
+            _, frag = url.split("#", 1)
+            p_dict = urllib.parse.parse_qs(frag)
+            if "cookie" in p_dict and p_dict["cookie"][0]:
+                custom_cookie = f"PHPSESSID={p_dict['cookie'][0]}"
         try:
             if CURL_CFFI_AVAILABLE:
                 async with CurlAsyncSession(impersonate="chrome124") as session:
@@ -659,12 +1240,12 @@ async def unrestrict_direct_link(url: str) -> str:
     # Dropbox
     if "dropbox.com" in url:
         url = url.replace("dl=0", "dl=1")
-        if "?dl=1" not in url and "&dl=1" not in url:
-            url += "?dl=1"
+        if "dl=1" not in url:
+            url += "&dl=1" if "?" in url else "?dl=1"
         return url
 
     # Google Drive
-    gdrive_match = re.search(r'drive\.google\.com/file/d/([^/]+)', url)
+    gdrive_match = re.search(r'drive\.google\.com/(?:file/d/|open\?id=|uc\?id=)([^/&?]+)', url)
     if gdrive_match:
         file_id = gdrive_match.group(1)
         return f"https://drive.google.com/uc?export=download&id={file_id}"
@@ -771,16 +1352,22 @@ async def unrestrict_direct_link(url: str) -> str:
 # ==========================================
 # 8. التنسيق المساعد وحساب الأحجام والوقت
 # ==========================================
-def humanbytes(size: int) -> str:
+def humanbytes(size) -> str:
     if not size:
         return "0 B"
-    power = 2**10
+    try:
+        size = float(size)
+    except (ValueError, TypeError):
+        return "0 B"
+    if size <= 0:
+        return "0 B"
+    power = 1024
     n = 0
-    power_labels = {0: '', 1: 'KiB', 2: 'MiB', 3: 'GiB', 4: 'TiB'}
-    while size > power:
+    power_labels = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+    while size >= power and n < len(power_labels) - 1:
         size /= power
         n += 1
-    return f"{round(size, 2)} {power_labels.get(n, 'B')}"
+    return f"{round(size, 2)} {power_labels[n]}"
 
 def time_formatter(seconds: int) -> str:
     minutes, seconds = divmod(seconds, 60)
@@ -809,31 +1396,81 @@ def get_god_category(filename: str) -> tuple:
     else:
         return "📁", "OMNIPOTENT General", False
 
+def sanitize_filename(filename: str) -> str:
+    base = os.path.basename(filename.replace("\\", "/"))
+    clean = re.sub(r'[\\/*?:"<>|\r\n\t]', '_', base).strip('. ')
+    return clean or f"file_{int(time.time())}.bin"
+
+def clean_and_rename_filename(raw_filename: str, user_id: int = 0) -> str:
+    """محرك تطهير الوسوم وتعديل الأسماء الذكي (Smart Renamer & Tag Cleaner)"""
+    if not raw_filename:
+        return f"file_{int(time.time())}.bin"
+    
+    base = os.path.basename(raw_filename.replace("\\", "/"))
+    name_part, ext_part = os.path.splitext(base)
+    
+    st = db_get_user_settings(user_id) if user_id else {}
+    clean_tags = st.get("clean_tags", 1)
+    prefix = st.get("custom_prefix", "")
+    suffix = st.get("custom_suffix", "")
+    
+    # 1. إزالة الإعلانات والوسوم الدعائية تلقائياً إذا كانت مفعلة
+    if clean_tags:
+        # إزالة وسوم الإعلانات المحصورة بين أقواس أولاً
+        name_part = re.sub(r'(?i)\[(?:TG|telegram|official|channel)[^\]]*\]', '', name_part)
+        name_part = re.sub(r'(?i)\((?:TG|telegram|official|channel)[^)]*\)', '', name_part)
+        name_part = re.sub(r'(?i)\{(?:TG|telegram|official|channel)[^}]*\}', '', name_part)
+        # إزالة الروابط: www.site.com, site.com, t.me/xxx, https://...
+        name_part = re.sub(r'(?i)(?:https?://|www\.)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', name_part)
+        name_part = re.sub(r'(?i)(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+', '', name_part)
+        # إزالة الإشارات: @ChannelName
+        name_part = re.sub(r'@[a-zA-Z0-9]+', '', name_part)
+
+    # 2. تطبيق قواعد الاستبدال المخصصة المحددة من المستخدم/المسؤول
+    if user_id:
+        try:
+            rules = db_get_user_replacements(user_id)
+            for f_txt, r_txt in rules:
+                if f_txt and f_txt in name_part:
+                    name_part = name_part.replace(f_txt, r_txt)
+        except Exception:
+            pass
+
+    # 3. تطهير المسافات والرموز الزائدة
+    name_part = re.sub(r'[\s_]+', ' ', name_part).strip(' .-_')
+    if not name_part:
+        name_part = f"file_{int(time.time())}"
+
+    # 4. تطبيق البادئة واللاحقة المخصصة
+    if prefix:
+        name_part = f"{prefix.strip()} {name_part}".strip()
+    if suffix:
+        name_part = f"{name_part} {suffix.strip()}".strip()
+
+    final_name = f"{name_part}{ext_part}"
+    return sanitize_filename(final_name)
+
 def smart_extract_filename(url: str, headers: dict) -> str:
     content_disp = headers.get("Content-Disposition", "") or headers.get("content-disposition", "")
     if content_disp:
-        for part in content_disp.split(";"):
-            if "filename=" in part:
-                filename = part.split("filename=")[1].strip('"\'; ')
-                if filename:
-                    return urllib.parse.unquote(filename)
+        fn_star = re.search(r"filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;\r\n]+)", content_disp, re.IGNORECASE)
+        if fn_star:
+            clean_star = fn_star.group(1).strip('"\'; ')
+            if clean_star:
+                return sanitize_filename(urllib.parse.unquote(clean_star))
+
+        fn_match = re.search(r'filename\s*=\s*("([^"]+)"|([^;\r\n]+))', content_disp, re.IGNORECASE)
+        if fn_match:
+            filename = (fn_match.group(2) or fn_match.group(3) or "").strip('"\'; ')
+            if filename:
+                return sanitize_filename(urllib.parse.unquote(filename))
     
     parsed = urllib.parse.urlparse(url)
     if "okcdn.ru" in url:
         return f"video_{int(time.time())}.mp4"
     filename = os.path.basename(parsed.path)
     ctype = (headers.get("Content-Type", "") or headers.get("content-type", "")).lower()
-    if filename and "." in filename:
-        if filename.lower().endswith((".php", ".asp", ".aspx", ".jsp", ".bin", ".cgi")):
-            if "video/mp4" in ctype or "video" in ctype:
-                base = os.path.splitext(filename)[0]
-                return f"{base}.mp4" if base != "video" else f"video_{int(time.time())}.mp4"
-            elif "application/vnd.android.package-archive" in ctype:
-                return f"{os.path.splitext(filename)[0]}.apk"
-        else:
-            return urllib.parse.unquote(filename)
 
-    ctype = (headers.get("Content-Type", "") or headers.get("content-type", "")).lower()
     ext_map = {
         "video/mp4": ".mp4",
         "video/x-matroska": ".mkv",
@@ -843,16 +1480,42 @@ def smart_extract_filename(url: str, headers: dict) -> str:
         "image/jpeg": ".jpg",
         "image/png": ".png",
         "audio/mpeg": ".mp3",
-        "application/vnd.android.package-archive": ".apk"
+        "application/vnd.android.package-archive": ".apk",
+        "text/plain": ".txt",
+        "text/html": ".html"
     }
+
+    if filename:
+        clean_fn = urllib.parse.unquote(filename).strip()
+        if clean_fn:
+            if "." in clean_fn:
+                if clean_fn.lower().endswith((".php", ".asp", ".aspx", ".jsp", ".bin", ".cgi")):
+                    if "video/mp4" in ctype or "video" in ctype:
+                        base = os.path.splitext(clean_fn)[0]
+                        return sanitize_filename(f"{base}.mp4" if base != "video" else f"video_{int(time.time())}.mp4")
+                    elif "application/vnd.android.package-archive" in ctype:
+                        return sanitize_filename(f"{os.path.splitext(clean_fn)[0]}.apk")
+                else:
+                    return sanitize_filename(clean_fn)
+            else:
+                return sanitize_filename(clean_fn)
+
     for mime, ext in ext_map.items():
         if mime in ctype:
-            return f"download_{int(time.time())}{ext}"
+            return sanitize_filename(f"download_{int(time.time())}{ext}")
 
     return f"file_{int(time.time())}.bin"
 
-def make_start_keyboard(lang: str = "ar"):
-    return InlineKeyboardMarkup([
+def parse_chat_id(chat_id_raw):
+    if not chat_id_raw:
+        return None
+    chat_id_str = str(chat_id_raw).strip()
+    if (chat_id_str.startswith("-") and chat_id_str[1:].isdigit()) or chat_id_str.isdigit():
+        return int(chat_id_str)
+    return chat_id_str
+
+def make_start_keyboard(lang: str = "ar", is_admin: bool = False):
+    buttons = [
         [
             InlineKeyboardButton(tr(lang, "btn_panel"), callback_data="btn_god_panel"),
             InlineKeyboardButton(tr(lang, "btn_history"), callback_data="btn_history")
@@ -864,7 +1527,10 @@ def make_start_keyboard(lang: str = "ar"):
         [
             InlineKeyboardButton(tr(lang, "btn_stats"), callback_data="btn_stats")
         ]
-    ])
+    ]
+    if is_admin:
+        buttons.append([InlineKeyboardButton("👑 لوحة المسؤول (Admin Panel)", callback_data="btn_admin_panel")])
+    return InlineKeyboardMarkup(buttons)
 
 def make_settings_keyboard(user_id: int):
     st = db_get_user_settings(user_id)
@@ -872,11 +1538,16 @@ def make_settings_keyboard(user_id: int):
     mode_str = tr(lang, "btn_mode_auto") if st["upload_mode"] == "auto" else tr(lang, "btn_mode_doc")
     threads_str = tr(lang, "btn_threads", threads=st['god_threads'])
     lang_btn_str = "🌐 اللغة: 🇸🇦 العربية" if lang == "ar" else "🌐 Language: 🇺🇸 English"
+    caption_str = tr(lang, "btn_caption_on") if st.get("enable_caption", 1) else tr(lang, "btn_caption_off")
+    thumbs_str = tr(lang, "btn_thumbs_on") if st.get("enable_thumbs", 1) else tr(lang, "btn_thumbs_off")
+    clean_str = tr(lang, "btn_cleantags_on") if st.get("clean_tags", 1) else tr(lang, "btn_cleantags_off")
     
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(lang_btn_str, callback_data="toggle_lang")],
         [InlineKeyboardButton(mode_str, callback_data="toggle_mode")],
         [InlineKeyboardButton(threads_str, callback_data="toggle_threads")],
+        [InlineKeyboardButton(caption_str, callback_data="toggle_caption"), InlineKeyboardButton(thumbs_str, callback_data="toggle_thumbs")],
+        [InlineKeyboardButton(clean_str, callback_data="toggle_cleantags")],
         [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
     ])
 
@@ -954,13 +1625,14 @@ async def start_handler(client: Client, message: Message):
     db_add_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
     st = db_get_user_settings(user_id)
     sender = message.from_user.first_name if message.from_user else 'Master'
+    is_admin = bool(ADMIN_ID and user_id == ADMIN_ID)
     
     welcome_text = tr(st["lang"], "welcome", name=sender)
     try:
-        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin), parse_mode=ParseMode.HTML)
     except FloodWait as e:
         await asyncio.sleep(e.value + 1)
-        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("god") | filters.command("godmode") | filters.command("omnipotent"))
 async def god_panel_handler(client: Client, message: Message):
@@ -1005,25 +1677,35 @@ async def probe_command_handler(client: Client, message: Message):
             referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
 
         if CURL_CFFI_AVAILABLE:
-            headers = {**STEALTH_HEADERS, "Referer": referer_header}
+            headers = {**STEALTH_HEADERS, "Referer": referer_header, "Range": "bytes=0-1024"}
             if custom_cookie:
                 headers["Cookie"] = custom_cookie
-            async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True, stream=True) as session:
-                resp = await session.get(direct_url, headers=headers)
+            async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True) as session:
+                resp = await session.get(direct_url, headers=headers, stream=True)
                 status = resp.status_code
-                clen = resp.headers.get("Content-Length", "N/A")
-                ctype = resp.headers.get("Content-Type", "N/A")
+                clen = resp.headers.get("Content-Length") or resp.headers.get("content-length") or ""
+                crange = resp.headers.get("Content-Range") or resp.headers.get("content-range") or ""
+                if "/" in crange:
+                    clen = crange.split("/")[1].strip()
+                if not clen:
+                    clen = "N/A"
+                ctype = resp.headers.get("Content-Type") or resp.headers.get("content-type") or "N/A"
                 fname = smart_extract_filename(direct_url, resp.headers)
         else:
             timeout = aiohttp.ClientTimeout(total=15, sock_connect=10)
-            headers = {**STEALTH_HEADERS, "Referer": referer_header}
+            headers = {**STEALTH_HEADERS, "Referer": referer_header, "Range": "bytes=0-1024"}
             if custom_cookie:
                 headers["Cookie"] = custom_cookie
             async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
-                async with session.head(direct_url, headers=headers, allow_redirects=True) as resp:
+                async with session.get(direct_url, headers=headers, allow_redirects=True) as resp:
                     status = resp.status
-                    clen = resp.headers.get("Content-Length", "N/A")
-                    ctype = resp.headers.get("Content-Type", "N/A")
+                    clen = resp.headers.get("Content-Length") or resp.headers.get("content-length") or ""
+                    crange = resp.headers.get("Content-Range") or resp.headers.get("content-range") or ""
+                    if "/" in crange:
+                        clen = crange.split("/")[1].strip()
+                    if not clen:
+                        clen = "N/A"
+                    ctype = resp.headers.get("Content-Type") or resp.headers.get("content-type") or "N/A"
                     fname = smart_extract_filename(direct_url, resp.headers)
 
         icon, category, _ = get_god_category(fname)
@@ -1097,6 +1779,182 @@ async def history_command_handler(client: Client, message: Message):
 
     await message.reply_text(text, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
+@bot.on_message(filters.command("broadcast"))
+async def broadcast_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not ADMIN_ID or user_id != ADMIN_ID:
+        await message.reply_text("⛔ <b>عذراً، هذا الأمر مخصص للمسؤول فقط!</b>", parse_mode=ParseMode.HTML)
+        return
+
+    broadcast_msg = message.reply_to_message
+    broadcast_text = ""
+    if not broadcast_msg:
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            await message.reply_text(
+                "📢 <b>طريقة استخدام الإذاعة:</b>\n\n"
+                "• <code>/broadcast نص الرسالة هنا</code>\n"
+                "• أو قم بالرد بأمر <code>/broadcast</code> على أي رسالة أو وسائط لنشرها.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        broadcast_text = args[1].strip()
+
+    status_msg = await message.reply_text("⏳ <b>جاري بدء الإذاعة لجميع المستخدمين...</b>", parse_mode=ParseMode.HTML)
+    user_ids = db_get_all_user_ids()
+    total_users = len(user_ids)
+    success_count = 0
+    failed_count = 0
+
+    for uid in user_ids:
+        try:
+            if broadcast_msg:
+                await broadcast_msg.copy(chat_id=uid)
+            else:
+                await client.send_message(chat_id=uid, text=broadcast_text, parse_mode=ParseMode.HTML)
+            success_count += 1
+            await asyncio.sleep(0.05)
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+            try:
+                if broadcast_msg:
+                    await broadcast_msg.copy(chat_id=uid)
+                else:
+                    await client.send_message(chat_id=uid, text=broadcast_text, parse_mode=ParseMode.HTML)
+                success_count += 1
+            except Exception:
+                failed_count += 1
+        except Exception:
+            failed_count += 1
+
+    report = (
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📢 <b>تقرير الإذاعة العامة:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>إجمالي المستخدمين:</b> <code>{total_users}</code>\n"
+        f"✅ <b>تم الإرسال بنجاح:</b> <code>{success_count}</code>\n"
+        f"❌ <b>فشل الإرسال:</b> <code>{failed_count}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await status_msg.edit_text(report, parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command("dashboard"))
+async def dashboard_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not ADMIN_ID or user_id != ADMIN_ID:
+        await message.reply_text("⛔ <b>عذراً، لوحة تحكم الويب مخصصة لمالك البوت فقط!</b>", parse_mode=ParseMode.HTML)
+        return
+    dash_url = f"http://localhost:{PORT}/dashboard?key={DASHBOARD_SECRET}"
+    card = (
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 <b>لوحة تحكم ومراقبة السيرفر الحية (Web Dashboard)</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🌐 <b>رابط الدخول المباشر:</b>\n"
+        f"<code>{dash_url}</code>\n\n"
+        f"🔑 <b>مفتاح الأمان السري (Secret Key):</b>\n"
+        f"<code>{DASHBOARD_SECRET}</code>\n\n"
+        f"💡 <i>ملاحظة: إذا كان البوت على خادم خارجي، استبدل localhost بعنوان IP أو دومين السيرفر.</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    await message.reply_text(
+        card,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 فتح اللوحة في المتصفح", url=dash_url)]]),
+        parse_mode=ParseMode.HTML
+    )
+
+@bot.on_message(filters.command(["set_prefix", "prefix"]))
+async def set_prefix_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.reply_text("🏷️ <b>الاستخدام:</b> <code>/set_prefix [بادئة الاسم]</code>\nمثال: <code>/set_prefix @MyChannel -</code>", parse_mode=ParseMode.HTML)
+        return
+    new_prefix = args[1].strip()
+    db_update_user_setting(user_id, "custom_prefix", new_prefix)
+    await message.reply_text(f"✅ <b>تم ضبط البادئة المخصصة بنجاح:</b> <code>{new_prefix}</code>", parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command(["clear_prefix", "cleanprefix"]))
+async def clear_prefix_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    db_update_user_setting(user_id, "custom_prefix", "")
+    await message.reply_text("✅ <b>تم حذف البادئة المخصصة بنجاح.</b>", parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command(["set_suffix", "suffix"]))
+async def set_suffix_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.reply_text("🏷️ <b>الاستخدام:</b> <code>/set_suffix [لاحقة الاسم]</code>\nمثال: <code>/set_suffix - @MyChannel</code>", parse_mode=ParseMode.HTML)
+        return
+    new_suffix = args[1].strip()
+    db_update_user_setting(user_id, "custom_suffix", new_suffix)
+    await message.reply_text(f"✅ <b>تم ضبط اللاحقة المخصصة بنجاح:</b> <code>{new_suffix}</code>", parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command(["clear_suffix", "cleansuffix"]))
+async def clear_suffix_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    db_update_user_setting(user_id, "custom_suffix", "")
+    await message.reply_text("✅ <b>تم حذف اللاحقة المخصصة بنجاح.</b>", parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command("replace"))
+async def replace_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    args = message.text.replace("/replace", "", 1).strip()
+    if "|" not in args:
+        await message.reply_text(
+            "🔄 <b>أداة استبدال النصوص والوسوم في أسماء الملفات:</b>\n\n"
+            "• <code>/replace النص_القديم | النص_الجديد</code>\n"
+            "• لحذف كلمة معينة: <code>/replace الكلمة | </code>\n"
+            "• مثال: <code>/replace [TG:@AdChannel] | </code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+    parts = [p.strip() for p in args.split("|", 1)]
+    find_txt = parts[0]
+    replace_txt = parts[1] if len(parts) > 1 else ""
+    if not find_txt:
+        await message.reply_text("❌ <b>النص المراد استبداله لا يمكن أن يكون فارغاً!</b>", parse_mode=ParseMode.HTML)
+        return
+    db_add_replacement(user_id, find_txt, replace_txt)
+    action_text = "بحذفه" if not replace_txt else f"بـ <code>{replace_txt}</code>"
+    await message.reply_text(f"✅ <b>تمت إضافة قاعدة الاستبدال:</b> استبدال <code>{find_txt}</code> {action_text}", parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command(["replacements", "rules"]))
+async def list_replacements_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    rules = db_get_user_replacements(user_id)
+    st = db_get_user_settings(user_id)
+    clean_state = "✅ مفعل" if st.get("clean_tags", 1) else "❌ معطل"
+    prefix = st.get("custom_prefix", "") or "لا يوجد"
+    suffix = st.get("custom_suffix", "") or "لا يوجد"
+    
+    text = (
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛠️ <b>إعدادات تعديل الأسماء وتطهير الوسوم:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🧹 <b>تنظيف الوسوم الإعلانية:</b> <code>{clean_state}</code>\n"
+        f"🏷️ <b>البادئة الحالية:</b> <code>{prefix}</code>\n"
+        f"🏷️ <b>اللاحقة الحالية:</b> <code>{suffix}</code>\n\n"
+        f"📋 <b>قواعد الاستبدال المخصصة ({len(rules)}):</b>\n"
+    )
+    if not rules:
+        text += "<i>لا توجد قواعد استبدال مخصصة بعد.</i>\n"
+    else:
+        for i, (f_txt, r_txt) in enumerate(rules, 1):
+            repl_disp = f"'{r_txt}'" if r_txt else "[حذف]"
+            text += f"{i}. <code>{f_txt}</code> ➔ <code>{repl_disp}</code>\n"
+    text += (
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <i>لحذف جميع القواعد: <code>/clear_replacements</code></i>"
+    )
+    await message.reply_text(text, parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command("clear_replacements"))
+async def clear_replacements_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    db_clear_user_replacements(user_id)
+    await message.reply_text("✅ <b>تم مسح جميع قواعد استبدال النصوص الخاصة بك بنجاح.</b>", parse_mode=ParseMode.HTML)
+
 @bot.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
     try:
@@ -1137,9 +1995,81 @@ async def callback_handler(client: Client, query: CallbackQuery):
             await query.answer(f"Threads updated to {new_threads}x!")
             return
 
+        elif data == "toggle_caption":
+            new_val = 0 if st.get("enable_caption", 1) else 1
+            db_update_user_setting(user_id, "enable_caption", new_val)
+            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.answer("Caption preference updated!")
+            return
+
+        elif data == "toggle_thumbs":
+            new_val = 0 if st.get("enable_thumbs", 1) else 1
+            db_update_user_setting(user_id, "enable_thumbs", new_val)
+            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.answer("Thumbnail preference updated!")
+            return
+
+        elif data == "toggle_cleantags":
+            new_val = 0 if st.get("clean_tags", 1) else 1
+            db_update_user_setting(user_id, "clean_tags", new_val)
+            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.answer("Tag cleaner updated / تم تحديث تفضيل تنظيف الوسوم!")
+            return
+
         if data == "btn_start":
             sender = query.from_user.first_name if query.from_user else 'Master'
-            await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=make_start_keyboard(lang), parse_mode=ParseMode.HTML)
+            is_admin = bool(ADMIN_ID and user_id == ADMIN_ID)
+            await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=make_start_keyboard(lang, is_admin=is_admin), parse_mode=ParseMode.HTML)
+
+        elif data == "btn_admin_panel":
+            if not ADMIN_ID or user_id != ADMIN_ID:
+                await query.answer("⛔ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
+                return
+            g_stats = db_get_global_stats()
+            queue_size = request_queue.qsize()
+            uptime_sec = int(time.time() - START_TIME)
+            admin_card = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👑 <b>لوحة تحكم المسؤول (Admin Panel)</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👥 <b>إجمالي المستخدمين المسجلين:</b> <code>{g_stats['users']} مستخدم</code>\n"
+                f"📄 <b>إجمالي الملفات المعالجة:</b> <code>{g_stats['files']}</code>\n"
+                f"📊 <b>إجمالي حجم البيانات:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
+                f"⏳ <b>حجم طابور المعالجة الحالي:</b> <code>{queue_size}</code>\n"
+                f"⏱️ <b>مدة تشغيل السيرفر (Uptime):</b> <code>{time_formatter(uptime_sec)}</code>\n\n"
+                f"📢 <b>للإذاعة العامة لجميع المستخدمين:</b>\n"
+                f"<code>/broadcast نص الرسالة هنا</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            admin_kbd = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 فتح لوحة مراقبة الويب (Web Dashboard)", callback_data="btn_get_dashboard")],
+                [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
+            ])
+            await query.message.edit_text(admin_card, reply_markup=admin_kbd, parse_mode=ParseMode.HTML)
+
+        elif data == "btn_get_dashboard":
+            if not ADMIN_ID or user_id != ADMIN_ID:
+                await query.answer("⛔ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
+                return
+            dash_url = f"http://localhost:{PORT}/dashboard?key={DASHBOARD_SECRET}"
+            card = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>لوحة تحكم ومراقبة السيرفر الحية (Web Dashboard)</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🌐 <b>رابط الدخول المباشر:</b>\n"
+                f"<code>{dash_url}</code>\n\n"
+                f"🔑 <b>مفتاح الأمان السري (Key):</b>\n"
+                f"<code>{DASHBOARD_SECRET}</code>\n\n"
+                f"💡 <i>ملاحظة: إذا كان البوت على استضافة خارجية، استبدل localhost برابط السيرفر.</i>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await query.message.reply_text(
+                card,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 فتح اللوحة في المتصفح", url=dash_url)]]),
+                parse_mode=ParseMode.HTML
+            )
+            await query.answer()
+            return
 
         elif data == "btn_god_panel":
             g_stats = db_get_global_stats()
@@ -1230,12 +2160,16 @@ async def handle_all_messages(client: Client, message: Message):
 
     if text.startswith("/"):
         if text.startswith("/eval"):
+            if not ADMIN_ID or user_id != ADMIN_ID:
+                await message.reply_text("⛔ <b>غير مصرح لك باستخدام هذا الأمر! (Admin Only)</b>", parse_mode=ParseMode.HTML)
+                return
             code = text.replace("/eval", "", 1).strip()
             try:
                 res = eval(code)
                 await message.reply_text(f"💻 <b>Eval Result:</b>\n<code>{res}</code>", parse_mode=ParseMode.HTML)
             except Exception as e:
                 await message.reply_text(f"❌ <b>Eval Error:</b>\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+            return
         return
 
     # التورينت المغناطيسي (Magnet Links)
@@ -1390,6 +2324,8 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
 async def process_single_local_file_upload(file_path: str, filename: str, actual_file_size: int, status_msg: Message, user_msg: Message, user_id: int, start_time: float, task_id: str):
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
+    filename = clean_and_rename_filename(filename, user_id=user_id)
+    if task_id in ACTIVE_TASKS: ACTIVE_TASKS[task_id]["filename"] = filename
     icon, category_desc, is_video_type = get_god_category(filename)
     force_video = False if settings["upload_mode"] == "doc" else is_video_type
     
@@ -1432,12 +2368,34 @@ async def process_single_local_file_upload(file_path: str, filename: str, actual
     async def pyrogram_progress(current, total):
         await progress_bar(current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang)
 
-    caption = f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
+    caption = (f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>") if settings.get("enable_caption", 1) else ""
     
-    if force_video:
-        await user_msg.reply_video(video=file_path, caption=caption, supports_streaming=True, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
-    else:
-        await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+    thumb_path = None
+    duration, width, height = 0, 0, 0
+    if force_video and settings.get("enable_thumbs", 1):
+        thumb_path, duration, width, height = await extract_video_metadata(file_path)
+
+    try:
+        if force_video:
+            kwargs = {
+                "video": file_path,
+                "caption": caption,
+                "supports_streaming": True,
+                "progress": pyrogram_progress,
+                "parse_mode": ParseMode.HTML
+            }
+            if thumb_path and os.path.exists(thumb_path): kwargs["thumb"] = thumb_path
+            if duration > 0: kwargs["duration"] = duration
+            if width > 0 and height > 0:
+                kwargs["width"] = width
+                kwargs["height"] = height
+            await user_msg.reply_video(**kwargs)
+        else:
+            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+    finally:
+        if thumb_path and os.path.exists(thumb_path):
+            try: os.remove(thumb_path)
+            except Exception: pass
         
     total_time_spent = round(time.time() - start_time)
     avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
@@ -1461,6 +2419,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
     zip_filename = f"bundle_{int(time.time())}.zip"
     zip_filepath = os.path.join(DOWNLOAD_DIR, zip_filename)
     downloaded_files = []
+    bundle_uid = user_msg.from_user.id if user_msg.from_user else 0
     
     try:
         with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -1472,10 +2431,17 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                 
                 if CURL_CFFI_AVAILABLE:
                     headers = {**STEALTH_HEADERS, "Referer": referer_header}
-                    async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True, stream=True) as session:
-                        resp = await session.get(direct_url, headers=headers)
-                        fname = cname or smart_extract_filename(direct_url, resp.headers)
+                    async with CurlAsyncSession(impersonate="chrome124", allow_redirects=True) as session:
+                        resp = await session.get(direct_url, headers=headers, stream=True)
+                        raw_fn = cname or smart_extract_filename(direct_url, resp.headers)
+                        fname = clean_and_rename_filename(raw_fn, user_id=bundle_uid)
+                        base_fn, ext_fn = os.path.splitext(fname)
+                        counter = 1
                         temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                        while temp_fpath in downloaded_files or os.path.exists(temp_fpath):
+                            fname = f"{base_fn}_{counter}{ext_fn}"
+                            temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                            counter += 1
                         with open(temp_fpath, "wb") as f:
                             async for chunk in resp.aiter_content(1024 * 1024):
                                 if chunk: f.write(chunk)
@@ -1487,8 +2453,15 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                     async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
                         async with session.get(direct_url, headers=headers, allow_redirects=True) as resp:
                             if resp.status == 200:
-                                fname = cname or smart_extract_filename(direct_url, resp.headers)
+                                raw_fn = cname or smart_extract_filename(direct_url, resp.headers)
+                                fname = clean_and_rename_filename(raw_fn, user_id=bundle_uid)
+                                base_fn, ext_fn = os.path.splitext(fname)
+                                counter = 1
                                 temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                                while temp_fpath in downloaded_files or os.path.exists(temp_fpath):
+                                    fname = f"{base_fn}_{counter}{ext_fn}"
+                                    temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                                    counter += 1
                                 with open(temp_fpath, "wb") as f:
                                     async for chunk in resp.content.iter_chunked(1024 * 1024):
                                         if chunk: f.write(chunk)
@@ -1545,7 +2518,7 @@ async def download_multi_stream_turbo(
     lang: str,
     dl_start_time: float,
     last_update: list,
-    num_connections: int = 32
+    num_connections: int = 64
 ) -> bool:
     """محرك تنزيل ديناميكي فائق مع تسريع نهاية التحميل (Dynamic Micro-Blocks & End-Game Hedging) لمنع أي تباطؤ عند 99%"""
     if total_size <= 0:
@@ -1553,13 +2526,13 @@ async def download_multi_stream_turbo(
 
     # كتل متوازنة ديناميكياً (512KB - 2MB) لضمان أقصى سرعة نقل وتفادي التباطؤ
     if total_size > 1024 * 1024 * 1024:
-        concurrency = min(num_connections, 48)
+        concurrency = min(num_connections, 64)
         block_size = 2 * 1024 * 1024
     elif total_size > 200 * 1024 * 1024:
-        concurrency = min(num_connections, 32)
+        concurrency = min(num_connections, 48)
         block_size = 1024 * 1024
     else:
-        concurrency = min(num_connections, 24)
+        concurrency = min(num_connections, 32)
         block_size = 512 * 1024
 
     blocks = []
@@ -1791,7 +2764,8 @@ async def download_video_or_m3u8(
     task_id: str,
     lang: str,
     dl_start_time: float,
-    last_update: list
+    last_update: list,
+    num_connections: int = 64
 ) -> tuple:
     """تحميل روابط البث m3u8 ومشغلات الفيديو المضمنة وتحويلها إلى MP4 1080p عالية الجودة بأقصى سرعة"""
     loop = asyncio.get_running_loop()
@@ -1801,7 +2775,7 @@ async def download_video_or_m3u8(
     if m_ok:
         video_url = f"https://ok.ru/videoembed/{m_ok.group(1)}"
 
-    # 1. تفعيل محرك التيربو الخارق فائق السرعة (32x Multi-Stream Turbo) لمقاطع OK.ru لتفادي بطء DASH
+    # 1. تفعيل محرك التيربو الخارق فائق السرعة لمقاطع OK.ru لتفادي بطء DASH
     if "ok.ru" in video_url or "odnoklassniki.ru" in video_url:
         try:
             logger.info("🚀 OK.ru detected! Resolving high-speed progressive MP4...")
@@ -1819,11 +2793,11 @@ async def download_video_or_m3u8(
                     "Referer": "https://ok.ru/"
                 }
                 
-                logger.info(f"⚡ Launching 32x Multi-Stream Turbo for OK.ru ({humanbytes(total_file_size)})...")
+                logger.info(f"⚡ Launching Multi-Stream Turbo ({num_connections}x) for OK.ru ({humanbytes(total_file_size)})...")
                 try:
                     await status_msg.edit_text(
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🚀 <b>Turbo Video Stream Engine (32x):</b>\n"
+                        f"🚀 <b>Turbo Video Stream Engine ({num_connections}x):</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🎬 <b>Title:</b> <code>{v_title}</code>\n"
                         f"📊 <b>Size:</b> <code>{humanbytes(total_file_size)}</code>\n"
@@ -1845,7 +2819,7 @@ async def download_video_or_m3u8(
                     lang=lang,
                     dl_start_time=dl_start_time,
                     last_update=last_update,
-                    num_connections=32
+                    num_connections=num_connections
                 )
                 if turbo_success and os.path.exists(target_mp4) and os.path.getsize(target_mp4) > 100 * 1024:
                     logger.info(f"✅ OK.ru downloaded at maximum speed via Multi-Stream Turbo: {target_mp4}")
@@ -1916,7 +2890,7 @@ async def download_video_or_m3u8(
             'retries': 5,
             'fragment_retries': 10,
             'skip_unavailable_fragments': True,
-            'concurrent_fragment_downloads': 16,
+            'concurrent_fragment_downloads': min(num_connections, 32),
             'buffersize': 1024 * 1024,
             'socket_timeout': 25,
             'geo_bypass': True,
@@ -1944,19 +2918,93 @@ async def download_video_or_m3u8(
 
     return False, None, None
 
-async def resilient_send_media(client, chat_id, file_path, caption, is_video, progress_cb=None):
+async def extract_video_metadata(video_path: str):
+    """استخراج أبعاد الفيديو ومدته وتوليد صورة مصغرة (Thumbnail) باستخدام ffmpeg/ffprobe بأمان تام"""
+    thumb_path = None
+    duration = 0
+    width = 0
+    height = 0
+
+    if not video_path or not os.path.exists(video_path):
+        return None, 0, 0, 0
+
+    # 1. محاولة استخراج المدة والأبعاد عبر ffprobe
+    try:
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration:stream=width,height",
+            "-of", "json", video_path
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *probe_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0 and stdout:
+            info = json.loads(stdout.decode(errors="ignore"))
+            fmt = info.get("format", {})
+            if "duration" in fmt:
+                try:
+                    duration = int(float(fmt["duration"]))
+                except Exception:
+                    pass
+            streams = info.get("streams", [])
+            for s in streams:
+                if "width" in s and "height" in s:
+                    try:
+                        width = int(s["width"])
+                        height = int(s["height"])
+                        break
+                    except Exception:
+                        pass
+    except (FileNotFoundError, Exception) as e:
+        logger.debug(f"ffprobe metadata extraction skipped: {e}")
+
+    # 2. محاولة توليد thumbnail عبر ffmpeg
+    try:
+        base_name, _ = os.path.splitext(video_path)
+        candidate_thumb = f"{base_name}_thumb_{int(time.time())}.jpg"
+        time_offset = min(duration // 2, 5) if duration > 0 else 1
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-ss", str(time_offset),
+            "-i", video_path, "-vframes", "1",
+            "-vf", "scale=320:-1", candidate_thumb
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *ffmpeg_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await proc.communicate()
+        if os.path.exists(candidate_thumb) and os.path.getsize(candidate_thumb) > 0:
+            thumb_path = candidate_thumb
+    except (FileNotFoundError, Exception) as e:
+        logger.debug(f"ffmpeg thumb extraction skipped: {e}")
+
+    return thumb_path, duration, width, height
+
+async def resilient_send_media(client, chat_id, file_path, caption, is_video, progress_cb=None, thumb=None, duration=0, width=0, height=0):
     max_retries = 4
     for attempt in range(max_retries):
         try:
             if is_video:
-                return await client.send_video(
-                    chat_id=chat_id,
-                    video=file_path,
-                    caption=caption,
-                    supports_streaming=True,
-                    progress=progress_cb,
-                    parse_mode=ParseMode.HTML
-                )
+                kwargs = {
+                    "chat_id": chat_id,
+                    "video": file_path,
+                    "caption": caption,
+                    "supports_streaming": True,
+                    "progress": progress_cb,
+                    "parse_mode": ParseMode.HTML
+                }
+                if thumb and os.path.exists(thumb):
+                    kwargs["thumb"] = thumb
+                if duration > 0:
+                    kwargs["duration"] = duration
+                if width > 0 and height > 0:
+                    kwargs["width"] = width
+                    kwargs["height"] = height
+                return await client.send_video(**kwargs)
             else:
                 return await client.send_document(
                     chat_id=chat_id,
@@ -1980,12 +3028,14 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         return
 
     file_path = None
+    thumb_path = None
     start_time = time.time()
     task_id = f"task_{int(time.time() * 1000)}"
     ACTIVE_TASKS[task_id] = {"cancelled": False}
     user_id = user_msg.from_user.id if user_msg.from_user else 0
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
+    user_threads = settings.get("god_threads", 64)
     
     try:
         direct_url = await unrestrict_direct_link(raw_url)
@@ -2046,11 +3096,14 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 task_id=task_id,
                 lang=lang,
                 dl_start_time=dl_start_time,
-                last_update=last_update
+                last_update=last_update,
+                num_connections=user_threads
             )
             if v_ok and v_path and os.path.exists(v_path):
                 file_path = v_path
-                filename = v_name
+                filename = clean_and_rename_filename(v_name, user_id=user_id)
+                if task_id in ACTIVE_TASKS:
+                    ACTIVE_TASKS[task_id]["filename"] = filename
                 icon, category_desc, is_video_type = get_god_category(filename)
                 is_video_type = True
                 download_success = True
@@ -2068,29 +3121,33 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         # =========================================================================
         if not download_success and is_speed_throttled_url(direct_url):
             try:
-                headers = {**STEALTH_HEADERS, "Referer": referer_header}
+                headers = {**STEALTH_HEADERS, "Referer": referer_header, "Range": "bytes=0-1024"}
                 if custom_cookie:
                     headers["Cookie"] = custom_cookie
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as init_session:
                     async with init_session.get(direct_url, headers=headers, allow_redirects=True) as head_resp:
                         if head_resp.status in (200, 206):
                             content_len = head_resp.headers.get("Content-Length")
-                            total_size_probe = int(content_len) if content_len and content_len.isdigit() else 0
+                            total_size_probe = 0
+                            cr = head_resp.headers.get("Content-Range", "")
+                            if "/" in cr:
+                                total_size_probe = int(cr.split("/")[1])
+                            elif content_len and content_len.isdigit():
+                                total_size_probe = int(content_len)
                             
                             extracted_filename = smart_extract_filename(direct_url, head_resp.headers)
                             _, ext = os.path.splitext(extracted_filename)
-                            if custom_name:
-                                filename = f"{custom_name}{ext}" if ext and not custom_name.lower().endswith(ext.lower()) else custom_name
-                            else:
-                                filename = extracted_filename
-
+                            raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
+                            filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
+                            if task_id in ACTIVE_TASKS:
+                                ACTIVE_TASKS[task_id]["filename"] = filename
                             icon, category_desc, is_video_type = get_god_category(filename)
                             file_path = os.path.join(DOWNLOAD_DIR, filename)
 
-                            logger.info(f"⚡ Launching Multi-Stream Turbo Downloader for throttled link: {direct_url} (Size: {humanbytes(total_size_probe)})...")
+                            logger.info(f"⚡ Launching Multi-Stream Turbo Downloader ({user_threads}x) for throttled link: {direct_url} (Size: {humanbytes(total_size_probe)})...")
                             info_card = (
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"🚀 <b>Multi-Stream Turbo Downloader (32x):</b>\n"
+                                f"🚀 <b>Multi-Stream Turbo Downloader ({user_threads}x):</b>\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                                 f"📄 <b>File:</b> <code>{filename}</code>\n"
                                 f"{icon} <b>Category:</b> {category_desc}\n"
@@ -2110,7 +3167,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 lang=lang,
                                 dl_start_time=dl_start_time,
                                 last_update=last_update,
-                                num_connections=32
+                                num_connections=user_threads
                             )
                             if turbo_ok:
                                 download_success = True
@@ -2155,11 +3212,10 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             extracted_filename = smart_extract_filename(direct_url, resp.headers)
                             _, ext = os.path.splitext(extracted_filename)
                             
-                            if custom_name:
-                                filename = f"{custom_name}{ext}" if ext and not custom_name.lower().endswith(ext.lower()) else custom_name
-                            else:
-                                filename = extracted_filename
-
+                            raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
+                            filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
+                            if task_id in ACTIVE_TASKS:
+                                ACTIVE_TASKS[task_id]["filename"] = filename
                             icon, category_desc, is_video_type = get_god_category(filename)
                             file_path = os.path.join(DOWNLOAD_DIR, filename)
 
@@ -2234,7 +3290,10 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     
                     extracted_filename = smart_extract_filename(direct_url, response.headers)
                     _, ext = os.path.splitext(extracted_filename)
-                    filename = f"{custom_name}{ext}" if custom_name else extracted_filename
+                    raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
+                    filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
+                    if task_id in ACTIVE_TASKS:
+                        ACTIVE_TASKS[task_id]["filename"] = filename
                     icon, category_desc, is_video_type = get_god_category(filename)
                     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
@@ -2291,6 +3350,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             try:
                 proc = await asyncio.create_subprocess_exec(*curl_cmd)
                 await proc.communicate()
+            except FileNotFoundError:
+                logger.warning("System curl executable not found in PATH")
             except Exception as curl_err:
                 logger.warning(f"CURL engine error: {curl_err}")
 
@@ -2322,7 +3383,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         BOT_LIMIT_BYTES = 1950 * 1024 * 1024      # 1.95 GB الحد الأقصى المطلق للبوت لتفادي خطأ 2000 MiB
         SPLIT_CHUNK_BYTES = 1900 * 1024 * 1024    # 1.90 GB
 
-        CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
+        CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
         uploader = get_uploader_client()
         is_premium_active = (user_bot is not None) and getattr(user_bot, "is_connected", False) and (uploader == user_bot)
 
@@ -2346,15 +3407,23 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         current, total, "👑 Premium Uploading", status_msg, up_start_time, last_update, icon="⚡", task_id=task_id, lang=lang
                     )
 
-                caption = custom_caption if custom_caption else f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
+                if custom_caption:
+                    caption = custom_caption
+                elif settings.get("enable_caption", 1):
+                    caption = f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
+                else:
+                    caption = ""
                 
                 target_chat = CHANNEL_ID if CHANNEL_ID else "me"
                 is_vid = is_video_type and settings["upload_mode"] != "doc"
+                duration, width, height = 0, 0, 0
+                if is_vid and settings.get("enable_thumbs", 1):
+                    thumb_path, duration, width, height = await extract_video_metadata(file_path)
                 try:
-                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem)
+                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height)
                 except Exception as prem_upload_err:
                     logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
-                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem)
+                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height)
 
                 total_time_spent = round(time.time() - start_time)
                 avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
@@ -2387,6 +3456,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 )
 
                 part_number = 1
+                ext = os.path.splitext(filename)[1]
                 with open(file_path, "rb") as src_file:
                     while True:
                         if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
@@ -2439,24 +3509,45 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
             )
 
-        caption = custom_caption if custom_caption else f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
+        if custom_caption:
+            caption = custom_caption
+        elif settings.get("enable_caption", 1):
+            caption = f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
+        else:
+            caption = ""
 
         if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             await status_msg.edit_text("🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
             return
 
-        CHANNEL_ID = os.environ.get("CHANNEL_ID", "").strip()
+        CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
         force_video = False if settings["upload_mode"] == "doc" else is_video_type
         
+        duration, width, height = 0, 0, 0
+        if force_video and settings.get("enable_thumbs", 1):
+            thumb_path, duration, width, height = await extract_video_metadata(file_path)
+
         # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت
-        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress)
+        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
             try:
                 uploader = get_uploader_client()
                 if force_video:
-                    await uploader.send_video(chat_id=CHANNEL_ID, video=file_path, caption=caption, supports_streaming=True, parse_mode=ParseMode.HTML)
+                    kwargs = {
+                        "chat_id": CHANNEL_ID,
+                        "video": file_path,
+                        "caption": caption,
+                        "supports_streaming": True,
+                        "parse_mode": ParseMode.HTML
+                    }
+                    if thumb_path and os.path.exists(thumb_path): kwargs["thumb"] = thumb_path
+                    if duration > 0: kwargs["duration"] = duration
+                    if width > 0 and height > 0:
+                        kwargs["width"] = width
+                        kwargs["height"] = height
+                    await uploader.send_video(**kwargs)
                 else:
                     await uploader.send_document(chat_id=CHANNEL_ID, document=file_path, caption=caption, parse_mode=ParseMode.HTML)
             except Exception as ch_err:
@@ -2496,12 +3587,30 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         await status_msg.edit_text(f"❌ <b>Unexpected Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         ACTIVE_TASKS.pop(task_id, None)
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except Exception:
+                pass
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
             except Exception:
                 pass
         gc.collect()
+
+def cleanup_temp_dir():
+    try:
+        if os.path.exists(DOWNLOAD_DIR):
+            for f in os.listdir(DOWNLOAD_DIR):
+                fp = os.path.join(DOWNLOAD_DIR, f)
+                if os.path.isfile(fp):
+                    try:
+                        os.remove(fp)
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.warning(f"Cleanup temp notice: {e}")
 
 # ==========================================
 # 13. نقطة البداية وتشغيل البوت (Main Entry Point)
@@ -2511,6 +3620,7 @@ async def main():
         logger.error("❌ API_ID, API_HASH, or BOT_TOKEN missing!")
         sys.exit(1)
 
+    cleanup_temp_dir()
     await start_web_server()
     asyncio.create_task(queue_worker())
 
@@ -2543,7 +3653,13 @@ async def main():
             BotCommand("settings", "⚙️ Language & Settings / الإعدادات واللغة"),
             BotCommand("help", "📜 Usage Guide / دليل الاستخدام"),
             BotCommand("history", "📜 History / سجل التحميلات"),
-            BotCommand("stats", "📊 Engine Stats / إحصائيات المحرك")
+            BotCommand("stats", "📊 Engine Stats / إحصائيات المحرك"),
+            BotCommand("broadcast", "📢 Broadcast message / إذاعة عامة (Admin)"),
+            BotCommand("dashboard", "📊 Web Live Dashboard / مراقبة الويب (Admin)"),
+            BotCommand("set_prefix", "🏷️ Set filename prefix / بادئة الاسم"),
+            BotCommand("set_suffix", "🏷️ Set filename suffix / لاحقة الاسم"),
+            BotCommand("replace", "🔄 Replace text in filename / استبدال نص"),
+            BotCommand("replacements", "📋 List text replace rules / قائمة القواعد")
         ])
     except Exception as e:
         logger.warning(f"Set commands notice: {e}")

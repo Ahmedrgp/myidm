@@ -5,3 +5,7 @@
 __pycache__/
 *.pyc
 /tmp/
+ctele_downloads/
+downloads/
+*.log
+

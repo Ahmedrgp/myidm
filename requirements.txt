@@ -7,3 +7,4 @@ torrentp
 python-dotenv
 curl-cffi
 yt-dlp
+psutil
