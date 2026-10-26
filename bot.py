@@ -448,9 +448,27 @@ def init_db():
             cert_sha256 TEXT,
             size INTEGER,
             filename TEXT,
-            checked_at REAL
+            checked_at REAL,
+            min_sdk INTEGER,
+            target_sdk INTEGER
         )
     """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS download_deliveries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            url_key TEXT NOT NULL,
+            filename TEXT,
+            total_size INTEGER,
+            chat_id INTEGER NOT NULL,
+            message_ids TEXT NOT NULL,
+            package TEXT,
+            version_code INTEGER,
+            created_at INTEGER NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_user_url ON download_deliveries(user_id, url_key)")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bot_meta (
@@ -495,6 +513,21 @@ def init_db():
 
     try:
         cursor.execute("ALTER TABLE history ADD COLUMN category TEXT DEFAULT '📁 عام'")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE pending_downloads ADD COLUMN url_key TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE apk_inspections ADD COLUMN min_sdk INTEGER")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE apk_inspections ADD COLUMN target_sdk INTEGER")
     except sqlite3.OperationalError:
         pass
 
@@ -620,15 +653,26 @@ def db_get_history(user_id: int, limit: int = 10) -> list:
     return rows
 
 def db_add_apk_inspection(user_id: int, package: str, version_name: str, version_code: int,
-                          file_sha256: str, cert_sha256: str, size: int, filename: str, checked_at: float = None) -> int:
+                          file_sha256: str, cert_sha256: str, size: int, filename: str,
+                          checked_at: float = None, min_sdk: int | None = None, target_sdk: int | None = None) -> int:
     if checked_at is None:
         checked_at = time.time()
+    if min_sdk is not None:
+        try:
+            min_sdk = int(min_sdk)
+        except (ValueError, TypeError):
+            pass
+    if target_sdk is not None:
+        try:
+            target_sdk = int(target_sdk)
+        except (ValueError, TypeError):
+            pass
     conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO apk_inspections (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at))
+        INSERT INTO apk_inspections (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk))
     row_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -642,7 +686,7 @@ def db_get_last_inspection_for_package(package: str, exclude_latest: bool = True
     try:
         if exclude_version_code is not None:
             cursor.execute("""
-                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at
+                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk
                 FROM apk_inspections
                 WHERE package = ? AND version_code != ?
                 ORDER BY id DESC
@@ -661,12 +705,14 @@ def db_get_last_inspection_for_package(package: str, exclude_latest: bool = True
                 "cert_sha256": row[6],
                 "size": row[7],
                 "filename": row[8],
-                "checked_at": row[9]
+                "checked_at": row[9],
+                "min_sdk": row[10],
+                "target_sdk": row[11]
             }
         else:
             limit = 2 if exclude_latest else 1
             cursor.execute("""
-                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at
+                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk
                 FROM apk_inspections
                 WHERE package = ?
                 ORDER BY id DESC
@@ -691,7 +737,9 @@ def db_get_last_inspection_for_package(package: str, exclude_latest: bool = True
                 "cert_sha256": row[6],
                 "size": row[7],
                 "filename": row[8],
-                "checked_at": row[9]
+                "checked_at": row[9],
+                "min_sdk": row[10],
+                "target_sdk": row[11]
             }
     except sqlite3.OperationalError:
         return None
@@ -705,7 +753,7 @@ def db_check_apk_duplicate(package: str, version_code: int) -> dict | None:
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at
+            SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk
             FROM apk_inspections
             WHERE package = ? AND version_code = ?
             ORDER BY id DESC
@@ -724,7 +772,9 @@ def db_check_apk_duplicate(package: str, version_code: int) -> dict | None:
             "cert_sha256": row[6],
             "size": row[7],
             "filename": row[8],
-            "checked_at": row[9]
+            "checked_at": row[9],
+            "min_sdk": row[10],
+            "target_sdk": row[11]
         }
     except sqlite3.OperationalError:
         return None
@@ -734,13 +784,28 @@ def db_check_apk_duplicate(package: str, version_code: int) -> dict | None:
 def db_add_pending_download(user_id: int, chat_id: int, file_path: str, filename: str,
                             custom_caption: str, package: str, version_name: str,
                             version_code: int, size: int, status: str = "pending",
-                            inspection_json: str = "", flow_type: str = "direct") -> int:
+                            inspection_json: str = "", flow_type: str = "direct",
+                            url_key: str = "") -> int:
+    if url_key:
+        try:
+            _ij = json.loads(inspection_json) if inspection_json else {}
+            if isinstance(_ij, dict):
+                _ij["url_key"] = url_key
+                inspection_json = json.dumps(_ij)
+        except Exception:
+            pass
     conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO pending_downloads (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, time.time(), status, inspection_json, flow_type))
+    try:
+        cursor.execute("""
+            INSERT INTO pending_downloads (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type, url_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, time.time(), status, inspection_json, flow_type, url_key))
+    except sqlite3.OperationalError:
+        cursor.execute("""
+            INSERT INTO pending_downloads (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, time.time(), status, inspection_json, flow_type))
     row_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -750,30 +815,66 @@ def db_get_pending_download(pending_id: int) -> dict | None:
     conn = sqlite3.connect(DB_FILE, timeout=30)
     cursor = conn.cursor()
     try:
-        cursor.execute("""
-            SELECT id, user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type
-            FROM pending_downloads
-            WHERE id = ?
-        """, (pending_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "user_id": row[1],
-            "chat_id": row[2],
-            "file_path": row[3],
-            "filename": row[4],
-            "custom_caption": row[5],
-            "package": row[6],
-            "version_name": row[7],
-            "version_code": row[8],
-            "size": row[9],
-            "created_at": row[10],
-            "status": row[11],
-            "inspection_json": row[12],
-            "flow_type": row[13]
-        }
+        try:
+            cursor.execute("""
+                SELECT id, user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type, url_key
+                FROM pending_downloads
+                WHERE id = ?
+            """, (pending_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            ret = {
+                "id": row[0],
+                "user_id": row[1],
+                "chat_id": row[2],
+                "file_path": row[3],
+                "filename": row[4],
+                "custom_caption": row[5],
+                "package": row[6],
+                "version_name": row[7],
+                "version_code": row[8],
+                "size": row[9],
+                "created_at": row[10],
+                "status": row[11],
+                "inspection_json": row[12],
+                "flow_type": row[13],
+                "url_key": row[14] or ""
+            }
+        except sqlite3.OperationalError:
+            cursor.execute("""
+                SELECT id, user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type
+                FROM pending_downloads
+                WHERE id = ?
+            """, (pending_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            ret = {
+                "id": row[0],
+                "user_id": row[1],
+                "chat_id": row[2],
+                "file_path": row[3],
+                "filename": row[4],
+                "custom_caption": row[5],
+                "package": row[6],
+                "version_name": row[7],
+                "version_code": row[8],
+                "size": row[9],
+                "created_at": row[10],
+                "status": row[11],
+                "inspection_json": row[12],
+                "flow_type": row[13],
+                "url_key": ""
+            }
+        if not ret["url_key"] and ret["inspection_json"]:
+            try:
+                _ij = json.loads(ret["inspection_json"])
+                if isinstance(_ij, dict) and _ij.get("url_key"):
+                    ret["url_key"] = _ij["url_key"]
+            except Exception:
+                pass
+        return ret
     except sqlite3.OperationalError:
         return None
     finally:
@@ -785,6 +886,117 @@ def db_update_pending_status(pending_id: int, status: str):
     cursor.execute("UPDATE pending_downloads SET status = ? WHERE id = ?", (status, pending_id))
     conn.commit()
     conn.close()
+
+def db_record_delivery(user_id: int, url_key: str, filename: str, total_size: int,
+                       chat_id: int, message_ids: list[int],
+                       package: str | None = None, version_code: int | None = None,
+                       created_at: int | None = None) -> int:
+    if not url_key or not message_ids or not user_id:
+        return 0
+    if created_at is None:
+        created_at = int(time.time())
+    msg_ids_json = json.dumps([int(m) for m in message_ids])
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM download_deliveries WHERE user_id = ? AND url_key = ?", (user_id, url_key))
+        cursor.execute("""
+            INSERT INTO download_deliveries (user_id, url_key, filename, total_size, chat_id, message_ids, package, version_code, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, url_key, filename, total_size, chat_id, msg_ids_json, package, version_code, created_at))
+        row_id = cursor.lastrowid
+        conn.commit()
+        return row_id
+    finally:
+        conn.close()
+
+def db_get_delivery(user_id: int, url_key: str) -> dict | None:
+    if not user_id or not url_key:
+        return None
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, user_id, url_key, filename, total_size, chat_id, message_ids, package, version_code, created_at
+            FROM download_deliveries
+            WHERE user_id = ? AND url_key = ?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (user_id, url_key))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            mids = json.loads(row[6])
+        except Exception:
+            mids = []
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "url_key": row[2],
+            "filename": row[3],
+            "total_size": row[4],
+            "chat_id": row[5],
+            "message_ids": mids,
+            "package": row[7],
+            "version_code": row[8],
+            "created_at": row[9]
+        }
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+def db_get_delivery_by_id(delivery_id: int) -> dict | None:
+    if not delivery_id:
+        return None
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, user_id, url_key, filename, total_size, chat_id, message_ids, package, version_code, created_at
+            FROM download_deliveries
+            WHERE id = ?
+        """, (delivery_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        try:
+            mids = json.loads(row[6])
+        except Exception:
+            mids = []
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "url_key": row[2],
+            "filename": row[3],
+            "total_size": row[4],
+            "chat_id": row[5],
+            "message_ids": mids,
+            "package": row[7],
+            "version_code": row[8],
+            "created_at": row[9]
+        }
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+def db_delete_delivery(delivery_id: int):
+    if not delivery_id:
+        return
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM download_deliveries WHERE id = ?", (delivery_id,))
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        conn.close()
+
+def db_get_apk_inspection(package: str, version_code: int) -> dict | None:
+    return db_check_apk_duplicate(package, version_code)
 
 def cleanup_expired_pending_downloads():
     conn = sqlite3.connect(DB_FILE, timeout=30)
@@ -2698,6 +2910,28 @@ def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") 
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
+def format_signer_change_warning(info: dict, prev: dict | None) -> str | None:
+    if not info or not prev:
+        return None
+    curr_cert = info.get("cert_sha256")
+    prev_cert = prev.get("cert_sha256")
+    if not curr_cert or not prev_cert:
+        return None
+    if curr_cert == prev_cert or str(curr_cert).strip().upper() == str(prev_cert).strip().upper():
+        return None
+
+    package = info.get("package") or prev.get("package") or "Unknown"
+    prev_vc = prev.get("version_code")
+    curr_vc = info.get("version_code")
+
+    prev_vc_str = str(prev_vc) if prev_vc is not None else "?"
+    curr_vc_str = str(curr_vc) if curr_vc is not None else "?"
+
+    return (
+        "⚠️ تنبيه: توقيع النسخة دي مختلف عن النسخة اللي فاتت من نفس التطبيق / Warning: this version is signed differently from the previous version of this app\n"
+        f"{package} ({prev_vc_str} → {curr_vc_str})"
+    )
+
 def format_blitzverify_block(info: dict) -> str:
     if not info:
         return ""
@@ -2784,6 +3018,45 @@ def format_blitzverify_block(info: dict) -> str:
 
     content = "\n".join(lines)
     return f"```\n{content}\n```"
+
+def format_fwdcache_note(filename: str, total_size: int, created_at: int) -> str:
+    try:
+        tz = ZoneInfo("Africa/Cairo")
+    except Exception:
+        tz = datetime.timezone(datetime.timedelta(hours=3))
+    dt = datetime.datetime.fromtimestamp(created_at, tz=tz)
+    date_str = dt.strftime("%Y-%m-%d %H:%M")
+    size_str = humanbytes(total_size)
+    return (
+        f"↪️ <b>أعدت توجيه الملف اللي نزّلته قبل كده بدل إعادة التحميل / Forwarded your earlier download instead of re-downloading</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📄 <b>الملف / File:</b> <code>{html.escape(filename or '')}</code>\n"
+        f"📦 <b>الحجم / Size:</b> <code>{size_str}</code>\n"
+        f"🕒 <b>تاريخ التحميل / Downloaded at:</b> <code>{date_str}</code> (Cairo Time)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+def is_message_not_found_error(exc: BaseException | None) -> bool:
+    if exc is None:
+        return False
+    cls_name = exc.__class__.__name__
+    if cls_name == "MessageIdInvalid":
+        return True
+    try:
+        from pyrogram.errors import MessageIdInvalid
+        if isinstance(exc, MessageIdInvalid):
+            return True
+    except ImportError:
+        pass
+    msg_str = str(exc).lower()
+    if (
+        "message_id_invalid" in msg_str
+        or "message to forward not found" in msg_str
+        or "message id invalid" in msg_str
+        or "message_not_found" in msg_str
+    ):
+        return True
+    return False
 
 def format_duplicate_warning_card(info: dict, prev: dict, lang: str = "ar") -> str:
     lines = []
@@ -2880,18 +3153,24 @@ async def handle_apk_inspection_card(file_path: str, filename: str, user_id: int
             cert_sha256=cert_sha256,
             size=info.get("size_bytes"),
             filename=filename,
-            checked_at=info.get("checked_at")
+            checked_at=info.get("checked_at"),
+            min_sdk=info.get("min_sdk"),
+            target_sdk=info.get("target_sdk")
         )
 
-        card_text = format_apk_inspection_card(info, prev, lang=lang)
-        if card_text:
-            await user_msg.reply_text(card_text, parse_mode=ParseMode.HTML)
+        warn_text = format_signer_change_warning(info, prev)
+        if warn_text:
             try:
-                block_text = format_blitzverify_block(info)
-                if block_text:
-                    await user_msg.reply_text(block_text, parse_mode=ParseMode.MARKDOWN)
-            except Exception as e_block:
-                logger.error(f"BLITZVERIFY block send failed: {e_block}", exc_info=True)
+                await user_msg.reply_text(warn_text, parse_mode=ParseMode.DISABLED)
+            except Exception as e_warn:
+                logger.error(f"Signer change warning send failed: {e_warn}", exc_info=True)
+
+        try:
+            block_text = format_blitzverify_block(info)
+            if block_text:
+                await user_msg.reply_text(block_text, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e_block:
+            logger.error(f"BLITZVERIFY block send failed: {e_block}", exc_info=True)
     except Exception as e:
         logger.error(f"APK inspection card failed silently: {e}", exc_info=True)
 
@@ -2919,6 +3198,10 @@ async def run_approved_pending_upload(pending_id: int, original_msg: Message):
         except Exception:
             pass
 
+    url_key = row.get("url_key", "")
+    if not url_key and precomputed and isinstance(precomputed, dict):
+        url_key = precomputed.get("url_key", "")
+
     status_msg = await original_msg.reply_text(
         f"📤 <b>{tr(lang, 'uploading')}</b>",
         parse_mode=ParseMode.HTML
@@ -2940,7 +3223,8 @@ async def run_approved_pending_upload(pending_id: int, original_msg: Message):
             custom_caption=custom_caption,
             skip_dup_check=True,
             precomputed_apk_info=precomputed,
-            pending_id=pending_id
+            pending_id=pending_id,
+            url_key=url_key
         )
     except Exception as e:
         logger.error(f"Error uploading approved pending download {pending_id}: {e}", exc_info=True)
@@ -3342,6 +3626,101 @@ async def clear_brand_handler(client: Client, message: Message):
     db_update_user_setting(user_id, "channel_tag", "")
     await message.reply_text("✅ <b>تم حذف حقوق القناة التلقائية بنجاح. ستنزل الملفات بدون وسم القناة.</b>", parse_mode=ParseMode.HTML)
 
+async def handle_url_intake(
+    url: str,
+    custom_name: str,
+    custom_caption: str,
+    status_msg: Message,
+    user_msg: Message,
+    force_fresh: bool = False,
+    client: Client | None = None
+):
+    url_key = (url or "").strip()
+    user_id = user_msg.from_user.id if (user_msg and user_msg.from_user and not getattr(user_msg.from_user, "is_bot", False)) else (user_msg.chat.id if user_msg and user_msg.chat else 0)
+
+    if not force_fresh and url_key and user_id:
+        delivery = db_get_delivery(user_id, url_key)
+        if delivery:
+            target_client = client or bot
+            try:
+                await target_client.forward_messages(
+                    chat_id=user_msg.chat.id,
+                    from_chat_id=delivery["chat_id"],
+                    message_ids=delivery["message_ids"]
+                )
+            except Exception as fwd_err:
+                if is_message_not_found_error(fwd_err):
+                    logger.warning(
+                        f"Forward failed for delivery id={delivery['id']} ({fwd_err}). "
+                        f"Deleting stale row and falling back to fresh download."
+                    )
+                    db_delete_delivery(delivery["id"])
+                    await process_download_and_upload(url, custom_name, custom_caption, status_msg, user_msg)
+                    return
+                else:
+                    raise fwd_err
+
+            note_text = format_fwdcache_note(
+                filename=delivery.get("filename") or "",
+                total_size=delivery.get("total_size") or 0,
+                created_at=delivery.get("created_at") or int(time.time())
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬇️ نزّله من جديد", callback_data=f"fwd_fresh_{delivery['id']}")]
+            ])
+            await user_msg.reply_text(note_text, reply_markup=markup, parse_mode=ParseMode.HTML)
+
+            pkg = delivery.get("package")
+            vc = delivery.get("version_code")
+            if pkg and vc is not None:
+                insp = db_get_apk_inspection(pkg, vc)
+                if insp:
+                    insp_info = {
+                        "package": insp.get("package"),
+                        "version_name": insp.get("version_name"),
+                        "version_code": insp.get("version_code"),
+                        "size_bytes": insp.get("size"),
+                        "file_sha256": insp.get("file_sha256"),
+                        "cert_sha256": insp.get("cert_sha256"),
+                        "checked_at": insp.get("checked_at"),
+                        "min_sdk": insp.get("min_sdk"),
+                        "target_sdk": insp.get("target_sdk")
+                    }
+                    block_text = format_blitzverify_block(insp_info)
+                    if block_text:
+                        await user_msg.reply_text(block_text, parse_mode=ParseMode.MARKDOWN)
+
+            if status_msg:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            return
+
+    await process_download_and_upload(url, custom_name, custom_caption, status_msg, user_msg)
+
+async def run_fresh_download(delivery_id: int, user_msg: Message, status_msg: Message | None = None, forced_user_id: int | None = None):
+    delivery = db_get_delivery_by_id(delivery_id)
+    if not delivery:
+        return False
+    if not status_msg:
+        status_msg = await user_msg.reply_text(
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ <b>Extracting & processing OMNIPOTENT URL...</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            parse_mode=ParseMode.HTML
+        )
+    uid = forced_user_id or delivery.get("user_id")
+    await process_download_and_upload(
+        raw_url=delivery["url_key"],
+        custom_name="",
+        custom_caption="",
+        status_msg=status_msg,
+        user_msg=user_msg,
+        forced_user_id=uid
+    )
+    return True
+
 @bot.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
     try:
@@ -3426,6 +3805,31 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.message.edit_text(tr(lang, "dup_cancelled_notice"), parse_mode=ParseMode.HTML)
             except Exception:
                 pass
+            return
+
+        if data.startswith("fwd_fresh_"):
+            delivery_id_str = data.split("fwd_fresh_", 1)[1]
+            try:
+                delivery_id = int(delivery_id_str)
+            except ValueError:
+                await query.answer("Invalid ID", show_alert=True)
+                return
+            delivery = db_get_delivery_by_id(delivery_id)
+            if not delivery:
+                await query.answer("Record not found / السجل غير موجود", show_alert=True)
+                return
+            await query.answer()
+            try:
+                await query.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            status_msg = await query.message.reply_text(
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"⚡ <b>Extracting & processing OMNIPOTENT URL...</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                parse_mode=ParseMode.HTML
+            )
+            asyncio.create_task(run_fresh_download(delivery_id, query.message, status_msg=status_msg, forced_user_id=delivery["user_id"]))
             return
 
         if data == "toggle_lang":
@@ -3723,7 +4127,7 @@ async def handle_queued_task(task_data):
             await process_zip_bundle(valid_requests, status_msg, user_msg)
         else:
             _, (url, custom_name, custom_caption), status_msg, user_msg = task_data
-            await process_download_and_upload(url, custom_name, custom_caption, status_msg, user_msg)
+            await handle_url_intake(url, custom_name, custom_caption, status_msg, user_msg)
     except Exception as e:
         logger.exception(f"Task error: {e}")
     finally:
@@ -3798,7 +4202,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
         for fpath in downloaded_items:
             fname = os.path.basename(fpath)
             fsize = os.path.getsize(fpath)
-            await process_single_local_file_upload(fpath, fname, fsize, status_msg, user_msg, user_id, start_time, task_id)
+            await process_single_local_file_upload(fpath, fname, fsize, status_msg, user_msg, user_id, start_time, task_id, url_key=torrent_src)
 
     except Exception as e:
         await safe_edit_text(status_msg, f"❌ <b>Torrent Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
@@ -3818,7 +4222,8 @@ async def process_single_local_file_upload(
     custom_caption: str = "",
     skip_dup_check: bool = False,
     precomputed_apk_info: dict | None = None,
-    pending_id: int | None = None
+    pending_id: int | None = None,
+    url_key: str = ""
 ):
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
@@ -3875,6 +4280,10 @@ async def process_single_local_file_upload(
     is_premium_active = (user_bot is not None) and getattr(user_bot, "is_connected", False) and (uploader == user_bot)
     CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
 
+    if is_apk_family and not precomputed_apk_info and file_path and os.path.exists(file_path):
+        loop = asyncio.get_running_loop()
+        precomputed_apk_info = await loop.run_in_executor(None, inspect_apk, file_path)
+
     if actual_file_size > BOT_LIMIT_BYTES:
         if is_premium_active and actual_file_size <= (3950 * 1024 * 1024):
             # Premium upload
@@ -3901,12 +4310,13 @@ async def process_single_local_file_upload(
             thumb_path, duration, width, height = None, 0, 0, 0
             if is_vid and settings.get("enable_thumbs", 1):
                 thumb_path, duration, width, height = await extract_video_metadata(file_path)
+            sent_msg = None
             try:
                 try:
-                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+                    sent_msg = await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
                 except Exception as prem_upload_err:
                     logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
-                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+                    sent_msg = await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
             finally:
                 if thumb_path and os.path.exists(thumb_path):
                     try:
@@ -3917,6 +4327,11 @@ async def process_single_local_file_upload(
             total_time_spent = round(time.time() - start_time)
             avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
             db_add_history(user_id, filename, actual_file_size, category_desc)
+            if url_key and sent_msg and hasattr(sent_msg, "id") and isinstance(sent_msg.id, int) and not isinstance(sent_msg.id, bool):
+                deliv_chat = sent_msg.chat.id if hasattr(sent_msg, "chat") and sent_msg.chat else (target_chat if isinstance(target_chat, int) else user_msg.chat.id)
+                apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
+                apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
+                db_record_delivery(user_id, url_key, filename, actual_file_size, deliv_chat, [sent_msg.id], apk_pkg, apk_vc)
             await status_msg.delete()
 
             dest_text = f"القناة ({CHANNEL_ID})" if CHANNEL_ID else "الرسائل المحفوظة (Saved Messages)"
@@ -3963,6 +4378,7 @@ async def process_single_local_file_upload(
                 parse_mode=ParseMode.HTML
             )
             part_number = 1
+            deliv_part_ids = []
             ext = os.path.splitext(filename)[1]
             with open(file_path, "rb") as src_file:
                 while True:
@@ -3975,17 +4391,23 @@ async def process_single_local_file_upload(
                     part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
                     with open(part_filepath, "wb") as part_file:
                         part_file.write(chunk_data)
-                    await user_msg.reply_document(
+                    part_msg = await user_msg.reply_document(
                         document=part_filepath,
                         caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
                         parse_mode=ParseMode.HTML
                     )
+                    if part_msg and hasattr(part_msg, "id") and isinstance(part_msg.id, int) and not isinstance(part_msg.id, bool):
+                        deliv_part_ids.append(part_msg.id)
                     if os.path.exists(part_filepath):
                         os.remove(part_filepath)
                     part_number += 1
             total_time_spent = round(time.time() - start_time)
             avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
             db_add_history(user_id, filename, actual_file_size, category_desc)
+            if url_key and deliv_part_ids:
+                apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
+                apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
+                db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, deliv_part_ids, apk_pkg, apk_vc)
             await status_msg.delete()
             task_ssl_unverified = ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
             extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
@@ -4026,8 +4448,9 @@ async def process_single_local_file_upload(
     if force_video and settings.get("enable_thumbs", 1):
         thumb_path, duration, width, height = await extract_video_metadata(file_path)
 
+    sent_msg = None
     try:
-        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+        sent_msg = await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
         if CHANNEL_ID:
             try:
                 uploader = get_uploader_client()
@@ -4058,6 +4481,10 @@ async def process_single_local_file_upload(
     total_time_spent = round(time.time() - start_time)
     avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
     db_add_history(user_id, filename, actual_file_size, category_desc)
+    if url_key and sent_msg and hasattr(sent_msg, "id") and isinstance(sent_msg.id, int) and not isinstance(sent_msg.id, bool):
+        apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
+        apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
+        db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, [sent_msg.id], apk_pkg, apk_vc)
     await status_msg.delete()
     task_ssl_unverified = ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
     extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
@@ -4797,7 +5224,16 @@ def is_cert_verification_error(exc: BaseException | None, seen: set | None = Non
 
     return False
 
-async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
+async def process_download_and_upload(
+    raw_url: str,
+    custom_name: str,
+    custom_caption: str,
+    status_msg: Message,
+    user_msg: Message,
+    hop_count: int = 0,
+    original_raw_url: str | None = None,
+    forced_user_id: int | None = None
+):
     if hop_count >= 2:
         await safe_edit_text(status_msg, "❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
         return
@@ -4807,10 +5243,11 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
     start_time = time.time()
     task_id = f"task_{int(time.time() * 1000)}"
     ACTIVE_TASKS[task_id] = {"cancelled": False, "ssl_unverified": False}
-    user_id = user_msg.from_user.id if user_msg.from_user else 0
+    user_id = forced_user_id if forced_user_id is not None else (user_msg.from_user.id if (user_msg.from_user and not getattr(user_msg.from_user, "is_bot", False)) else (user_msg.chat.id if user_msg.chat else 0))
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
     user_threads = settings.get("god_threads", 64)
+    url_key = (original_raw_url or raw_url or "").strip()
     
     try:
         direct_url = await unrestrict_direct_link(raw_url)
@@ -5361,7 +5798,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             
             if real_url and real_url.split('#')[0] != raw_url.split('#')[0]:
                 logger.info(f"🔗 Real direct URL extracted from HTML: {real_url}")
-                await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg, hop_count=hop_count+1)
+                await process_download_and_upload(real_url, custom_name, custom_caption, status_msg, user_msg, hop_count=hop_count+1, original_raw_url=url_key, forced_user_id=user_id)
                 return
             else:
                 page_title = ""
@@ -5411,7 +5848,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             size=actual_file_size,
                             status="pending",
                             inspection_json=json.dumps(apk_info),
-                            flow_type="direct"
+                            flow_type="direct",
+                            url_key=url_key
                         )
                         warn_text = format_duplicate_warning_card(apk_info, dup_record, lang=lang)
                         kb = make_duplicate_keyboard(pending_id, lang=lang)
@@ -5459,15 +5897,21 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 duration, width, height = 0, 0, 0
                 if is_vid and settings.get("enable_thumbs", 1):
                     thumb_path, duration, width, height = await extract_video_metadata(file_path)
+                sent_msg = None
                 try:
-                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+                    sent_msg = await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
                 except Exception as prem_upload_err:
                     logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
-                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+                    sent_msg = await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
 
                 total_time_spent = round(time.time() - start_time)
                 avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
                 db_add_history(user_id, filename, actual_file_size, category_desc)
+                if url_key and sent_msg and hasattr(sent_msg, "id") and isinstance(sent_msg.id, int) and not isinstance(sent_msg.id, bool):
+                    deliv_chat = sent_msg.chat.id if hasattr(sent_msg, "chat") and sent_msg.chat else (target_chat if isinstance(target_chat, int) else user_msg.chat.id)
+                    apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
+                    apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
+                    db_record_delivery(user_id, url_key, filename, actual_file_size, deliv_chat, [sent_msg.id], apk_pkg, apk_vc)
                 await status_msg.delete()
 
                 dest_text = f"القناة ({CHANNEL_ID})" if CHANNEL_ID else "الرسائل المحفوظة (Saved Messages)"
@@ -5510,6 +5954,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 )
 
                 part_number = 1
+                deliv_part_ids = []
                 ext = os.path.splitext(filename)[1]
                 with open(file_path, "rb") as src_file:
                     while True:
@@ -5524,11 +5969,13 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             part_file.write(chunk_data)
 
                         # إرسال الجزء للمستخدم في الشات (يظهر دائماً وبشكل مؤكد)
-                        await user_msg.reply_document(
+                        part_msg = await user_msg.reply_document(
                             document=part_filepath,
                             caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
                             parse_mode=ParseMode.HTML
                         )
+                        if part_msg and hasattr(part_msg, "id") and isinstance(part_msg.id, int) and not isinstance(part_msg.id, bool):
+                            deliv_part_ids.append(part_msg.id)
 
                         if os.path.exists(part_filepath): os.remove(part_filepath)
                         part_number += 1
@@ -5536,6 +5983,10 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 total_time_spent = round(time.time() - start_time)
                 avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
                 db_add_history(user_id, filename, actual_file_size, category_desc)
+                if url_key and deliv_part_ids:
+                    apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
+                    apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
+                    db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, deliv_part_ids, apk_pkg, apk_vc)
                 await status_msg.delete()
 
                 extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""
@@ -5580,7 +6031,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             thumb_path, duration, width, height = await extract_video_metadata(file_path)
 
         # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت
-        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+        sent_msg = await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
@@ -5610,6 +6061,10 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
         
         db_add_history(user_id, filename, actual_file_size, category_desc)
+        if url_key and sent_msg and hasattr(sent_msg, "id") and isinstance(sent_msg.id, int) and not isinstance(sent_msg.id, bool):
+            apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
+            apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
+            db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, [sent_msg.id], apk_pkg, apk_vc)
         await status_msg.delete()
         
         extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""

@@ -158,17 +158,14 @@ class TestBlitzverify(unittest.TestCase):
             precomputed_info=self.sample_full
         )
 
-        self.assertEqual(len(replies), 2)
-        # First message: card (HTML)
-        self.assertIn("🛡️ بطاقة فحص APK", replies[0])
-        self.assertEqual(parse_modes[0], ParseMode.HTML)
-
-        # Second message: BLITZVERIFY code block (MARKDOWN)
-        self.assertTrue(replies[1].startswith("```\n"))
-        self.assertTrue(replies[1].endswith("\n```"))
-        self.assertIn("BLITZVERIFY v1", replies[1])
-        self.assertIn("package: org.supertuxkart.stk", replies[1])
-        self.assertEqual(parse_modes[1], ParseMode.MARKDOWN)
+        self.assertEqual(len(replies), 1)
+        # BLITZVERIFY code block (MARKDOWN) ONLY (no inspection card)
+        self.assertTrue(replies[0].startswith("```\n"))
+        self.assertTrue(replies[0].endswith("\n```"))
+        self.assertIn("BLITZVERIFY v1", replies[0])
+        self.assertIn("package: org.supertuxkart.stk", replies[0])
+        self.assertEqual(parse_modes[0], ParseMode.MARKDOWN)
+        self.assertFalse(any("🛡️ بطاقة فحص APK" in r for r in replies))
 
     def test_handle_card_emits_card_and_block(self):
         import asyncio

@@ -101,17 +101,16 @@ async def run_end_to_end_test():
             print(f"Fresh APK produced {len(replies)} reply messages:")
             for idx, r in enumerate(replies):
                 print(f"Reply {idx+1}:\n{r}\n")
-            assert len(replies) == 3, f"Expected exactly 3 replies (success card + inspection card + blitzverify block), got {len(replies)}"
+            assert len(replies) == 2, f"Expected exactly 2 replies (success card + blitzverify block), got {len(replies)}"
             assert "تمت العملية بنجاح" in replies[0]
-            assert "🛡️ بطاقة فحص APK | APK Inspection" in replies[1]
-            assert "android.appsecurity.cts.tinyapp" in replies[1]
-            assert "FB5DBD3C669AF9FC236C6991E6387B7F11FF0590997F22D0F5C74FF40E04FCA8" in replies[1]
-            assert "BLITZVERIFY v1" in replies[2]
-            assert "package: android.appsecurity.cts.tinyapp" in replies[2]
-            assert "version_code: 10" in replies[2]
-            assert "fb5dbd3c669af9fc236c6991e6387b7f11ff0590997f22d0f5c74ff40e04fca8" in replies[2]
-            assert replies[2].startswith("```\n") and replies[2].endswith("\n```")
-            print("CONFIRMED: Success card, inspection card, and BLITZVERIFY block sent in exact order.")
+            assert "🛡️ بطاقة فحص APK" not in replies[0]
+            assert "BLITZVERIFY v1" in replies[1]
+            assert "package: android.appsecurity.cts.tinyapp" in replies[1]
+            assert "version_code: 10" in replies[1]
+            assert "fb5dbd3c669af9fc236c6991e6387b7f11ff0590997f22d0f5c74ff40e04fca8" in replies[1]
+            assert replies[1].startswith("```\n") and replies[1].endswith("\n```")
+            assert not any("🛡️ بطاقة فحص APK" in r for r in replies)
+            print("CONFIRMED: Success card and BLITZVERIFY block sent in exact order (no inspection card).")
 
             # 3. Duplicate APK download test (paused before approval)
             print("\n==========================================")
@@ -149,12 +148,13 @@ async def run_end_to_end_test():
             print(f"Approved upload produced {len(replies)} reply messages:")
             for idx, r in enumerate(replies):
                 print(f"Reply {idx+1}:\n{r}\n")
-            # The approval flow sends an initial status message, then success card, and ends with [inspection card, block]
-            assert "🛡️ بطاقة فحص APK | APK Inspection" in replies[-2]
+            # The approval flow sends an initial status message, then success card, and ends with [block] (no inspection card)
+            assert len(replies) == 3, f"Expected exactly 3 replies (status + success card + block), got {len(replies)}"
             assert "BLITZVERIFY v1" in replies[-1]
             assert "package: android.appsecurity.cts.tinyapp" in replies[-1]
             assert replies[-1].startswith("```\n") and replies[-1].endswith("\n```")
-            print("CONFIRMED: Approved duplicate flow ends with inspection card and BLITZVERIFY block.")
+            assert not any("🛡️ بطاقة فحص APK" in r for r in replies)
+            print("CONFIRMED: Approved duplicate flow ends with BLITZVERIFY block (no inspection card).")
 
             print("\nALL END-TO-END HTTP DOWNLOAD FLOWS PASSED PERFECTLY!")
     finally:
