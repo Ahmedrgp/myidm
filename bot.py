@@ -3082,30 +3082,6 @@ async def broadcast_command_handler(client: Client, message: Message):
     )
     await status_msg.edit_text(report, parse_mode=ParseMode.HTML)
 
-@bot.on_message(filters.command("dashboard"))
-async def dashboard_command_handler(client: Client, message: Message):
-    user_id = message.from_user.id if message.from_user else 0
-    if not is_admin(user_id):
-        await message.reply_text("⛔ <b>عذراً، لوحة تحكم الويب مخصصة لمالك البوت فقط!</b>", parse_mode=ParseMode.HTML)
-        return
-    dash_url = f"http://localhost:{PORT}/dashboard?key={DASHBOARD_SECRET}"
-    card = (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 <b>لوحة تحكم ومراقبة السيرفر الحية (Web Dashboard)</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🌐 <b>رابط الدخول المباشر:</b>\n"
-        f"<code>{dash_url}</code>\n\n"
-        f"🔑 <b>مفتاح الأمان السري (Secret Key):</b>\n"
-        f"<code>{DASHBOARD_SECRET}</code>\n\n"
-        f"💡 <i>ملاحظة: إذا كان البوت على خادم خارجي، استبدل localhost بعنوان IP أو دومين السيرفر.</i>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
-    await message.reply_text(
-        card,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 فتح اللوحة في المتصفح", url=dash_url)]]),
-        parse_mode=ParseMode.HTML
-    )
-
 @bot.on_message(filters.command(["set_prefix", "prefix"]))
 async def set_prefix_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
@@ -3468,34 +3444,9 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
             admin_kbd = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 فتح لوحة مراقبة الويب (Web Dashboard)", callback_data="btn_get_dashboard")],
                 [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
             ])
             await query.message.edit_text(admin_card, reply_markup=admin_kbd, parse_mode=ParseMode.HTML)
-
-        elif data == "btn_get_dashboard":
-            if not is_admin(user_id):
-                await query.answer("⛔ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
-                return
-            dash_url = f"http://localhost:{PORT}/dashboard?key={DASHBOARD_SECRET}"
-            card = (
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>لوحة تحكم ومراقبة السيرفر الحية (Web Dashboard)</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🌐 <b>رابط الدخول المباشر:</b>\n"
-                f"<code>{dash_url}</code>\n\n"
-                f"🔑 <b>مفتاح الأمان السري (Key):</b>\n"
-                f"<code>{DASHBOARD_SECRET}</code>\n\n"
-                f"💡 <i>ملاحظة: إذا كان البوت على استضافة خارجية، استبدل localhost برابط السيرفر.</i>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            )
-            await query.message.reply_text(
-                card,
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 فتح اللوحة في المتصفح", url=dash_url)]]),
-                parse_mode=ParseMode.HTML
-            )
-            await query.answer()
-            return
 
         elif data == "btn_god_panel":
             g_stats = db_get_global_stats()
@@ -5413,7 +5364,6 @@ async def main():
             BotCommand("history", "📜 History / سجل التحميلات"),
             BotCommand("stats", "📊 Engine Stats / إحصائيات المحرك"),
             BotCommand("broadcast", "📢 Broadcast message / إذاعة عامة (Admin)"),
-            BotCommand("dashboard", "📊 Web Live Dashboard / مراقبة الويب (Admin)"),
             BotCommand("set_prefix", "🏷️ Set filename prefix / بادئة الاسم"),
             BotCommand("set_suffix", "🏷️ Set filename suffix / لاحقة الاسم"),
             BotCommand("replace", "🔄 Replace text in filename / استبدال نص"),
