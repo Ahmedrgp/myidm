@@ -32,6 +32,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.serialization import pkcs7
 from dotenv import load_dotenv
+import ssl
 import aiohttp
 from aiohttp import web
 
@@ -3986,6 +3987,8 @@ async def process_single_local_file_upload(
             avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
             db_add_history(user_id, filename, actual_file_size, category_desc)
             await status_msg.delete()
+            task_ssl_unverified = ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
+            extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
             success_card = (
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"{tr(lang, 'success_title')}\n"
@@ -3994,7 +3997,8 @@ async def process_single_local_file_upload(
                 f"{icon} {tr(lang, 'category')} {category_desc}\n"
                 f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} ({num_parts} Parts)</code>\n"
                 f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
+                f"{extra_ssl_line}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
             await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
@@ -4055,6 +4059,8 @@ async def process_single_local_file_upload(
     avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
     db_add_history(user_id, filename, actual_file_size, category_desc)
     await status_msg.delete()
+    task_ssl_unverified = ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
+    extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
     
     success_card = (
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -4064,7 +4070,8 @@ async def process_single_local_file_upload(
         f"{icon} {tr(lang, 'category')} {category_desc}\n"
         f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
         f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-        f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+        f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
+        f"{extra_ssl_line}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
@@ -4731,6 +4738,65 @@ async def resilient_send_media(client, chat_id, file_path, caption, is_video, pr
                 raise e
             await asyncio.sleep(2.0)
 
+TLS_VERIFICATION_SKIPPED_NOTICE = "🔓 تم تجاوز التحقق من الشهادة لهذا المضيف (سلسلة شهادة ناقصة) / TLS verification skipped for this host (broken certificate chain)"
+
+def is_cert_verification_error(exc: BaseException | None, seen: set | None = None) -> bool:
+    """
+    Returns True if exc is specifically a certificate verification failure
+    (e.g. broken certificate chain, missing intermediate, self-signed, expired, untrusted root).
+    Excludes non-certificate SSL errors (e.g. handshake failure, protocol mismatch, wrong version)
+    and non-SSL network/OS errors.
+    """
+    if exc is None:
+        return False
+    if seen is None:
+        seen = set()
+    exc_id = id(exc)
+    if exc_id in seen:
+        return False
+    seen.add(exc_id)
+
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return True
+    if isinstance(exc, aiohttp.ClientConnectorCertificateError):
+        return True
+
+    if CURL_CFFI_AVAILABLE:
+        try:
+            from curl_cffi.requests.exceptions import CertificateVerifyError
+            if isinstance(exc, CertificateVerifyError):
+                return True
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from curl_cffi.curl import CurlError
+            if isinstance(exc, CurlError) and getattr(exc, "code", None) == 60:
+                return True
+        except (ImportError, AttributeError):
+            pass
+
+    err_str = str(exc)
+    if "CERTIFICATE_VERIFY_FAILED" in err_str or "SSLCertVerificationError" in err_str:
+        return True
+
+    cert_err = getattr(exc, "certificate_error", None)
+    if cert_err is not None and is_cert_verification_error(cert_err, seen):
+        return True
+
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and is_cert_verification_error(cause, seen):
+        return True
+
+    context = getattr(exc, "__context__", None)
+    if context is not None and is_cert_verification_error(context, seen):
+        return True
+
+    os_err = getattr(exc, "os_error", None)
+    if os_err is not None and is_cert_verification_error(os_err, seen):
+        return True
+
+    return False
+
 async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
     if hop_count >= 2:
         await safe_edit_text(status_msg, "❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
@@ -4740,7 +4806,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
     thumb_path = None
     start_time = time.time()
     task_id = f"task_{int(time.time() * 1000)}"
-    ACTIVE_TASKS[task_id] = {"cancelled": False}
+    ACTIVE_TASKS[task_id] = {"cancelled": False, "ssl_unverified": False}
     user_id = user_msg.from_user.id if user_msg.from_user else 0
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
@@ -4781,6 +4847,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         dl_start_time = time.time()
         last_update = [0]
         download_success = False
+        ssl_unverified_used = False
 
         ok_init, _, free_init, reserve_init = check_disk_space(DOWNLOAD_DIR, None)
         if not ok_init:
@@ -4893,7 +4960,66 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             if turbo_ok:
                                 download_success = True
             except Exception as turbo_err:
-                logger.warning(f"Turbo download probe/fallback: {turbo_err}")
+                if is_cert_verification_error(turbo_err) and not ssl_unverified_used:
+                    host_name = parsed_url.netloc or parsed_url.hostname or direct_url
+                    logger.warning(
+                        f"TLS certificate verification failed for host {host_name} ({turbo_err}). "
+                        f"Retrying once with TLS verification disabled."
+                    )
+                    ssl_unverified_used = True
+                    if task_id in ACTIVE_TASKS:
+                        ACTIVE_TASKS[task_id]["ssl_unverified"] = True
+                    try:
+                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as init_session:
+                            async with init_session.get(direct_url, headers=headers, allow_redirects=True, ssl=False) as head_resp:
+                                if head_resp.status in (200, 206):
+                                    content_len = head_resp.headers.get("Content-Length")
+                                    total_size_probe = 0
+                                    cr = head_resp.headers.get("Content-Range", "")
+                                    if "/" in cr:
+                                        total_size_probe = int(cr.split("/")[1])
+                                    elif content_len and content_len.isdigit():
+                                        total_size_probe = int(content_len)
+                                    
+                                    extracted_filename = smart_extract_filename(direct_url, head_resp.headers)
+                                    _, ext = os.path.splitext(extracted_filename)
+                                    raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
+                                    filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
+                                    if task_id in ACTIVE_TASKS:
+                                        ACTIVE_TASKS[task_id]["filename"] = filename
+                                    icon, category_desc, is_video_type = get_god_category(filename)
+                                    file_path = os.path.join(DOWNLOAD_DIR, filename)
+
+                                    info_card = (
+                                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                        f"🚀 <b>Multi-Stream Turbo Downloader ({user_threads}x):</b>\n"
+                                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                        f"📄 <b>File:</b> <code>{filename}</code>\n"
+                                        f"{icon} <b>Category:</b> {category_desc}\n"
+                                        f"📊 <b>Size:</b> <code>{humanbytes(total_size_probe)}</code>\n"
+                                        f"⚡ <b>Bypassing Host Speed Cap Active</b>\n"
+                                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    )
+                                    await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+
+                                    turbo_ok = await download_multi_stream_turbo(
+                                        direct_url=direct_url,
+                                        file_path=file_path,
+                                        total_size=total_size_probe,
+                                        headers=headers,
+                                        status_msg=status_msg,
+                                        task_id=task_id,
+                                        lang=lang,
+                                        dl_start_time=dl_start_time,
+                                        last_update=last_update,
+                                        num_connections=user_threads
+                                    )
+                                    if turbo_ok:
+                                        download_success = True
+                    except Exception as retry_turbo_err:
+                        logger.warning(f"Unverified turbo download probe retry failed: {retry_turbo_err}")
+                else:
+                    logger.warning(f"Turbo download probe/fallback: {turbo_err}")
 
         profiles = [
             ("chrome124", referer_header),
@@ -5003,67 +5129,194 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 break
 
                     except Exception as ex:
-                        logger.warning(f"Connection retry {retry_idx} error: {ex}")
-                        await asyncio.sleep(1.0)
+                        if is_cert_verification_error(ex) and not ssl_unverified_used:
+                            host_name = parsed_url.netloc or parsed_url.hostname or direct_url
+                            logger.warning(
+                                f"TLS certificate verification failed for host {host_name} ({ex}). "
+                                f"Retrying once with TLS verification disabled."
+                            )
+                            ssl_unverified_used = True
+                            if task_id in ACTIVE_TASKS:
+                                ACTIVE_TASKS[task_id]["ssl_unverified"] = True
+                            if file_path and os.path.exists(file_path):
+                                try:
+                                    os.remove(file_path)
+                                except Exception:
+                                    pass
+                            status_tracker["downloaded"] = 0
+                            try:
+                                async with CurlAsyncSession(impersonate=target_prof, allow_redirects=True, verify=False) as unverified_session:
+                                    resp = await unverified_session.get(direct_url, headers=headers, stream=True)
+                                    if resp.status_code in (200, 206, 301, 302, 307, 308):
+                                        content_length = resp.headers.get("Content-Length") or resp.headers.get("content-length")
+                                        total_size = int(content_length) if content_length and content_length.isdigit() else 0
+                                        if resp.status_code == 206 and total_size:
+                                            total_size += status_tracker["downloaded"]
+
+                                        extracted_filename = smart_extract_filename(direct_url, resp.headers)
+                                        _, ext = os.path.splitext(extracted_filename)
+                                        raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
+                                        filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
+                                        if task_id in ACTIVE_TASKS:
+                                            ACTIVE_TASKS[task_id]["filename"] = filename
+                                        icon, category_desc, is_video_type = get_god_category(filename)
+                                        file_path = os.path.join(DOWNLOAD_DIR, filename)
+
+                                        size_disp = humanbytes(total_size) if total_size else "..."
+                                        info_card = (
+                                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                            f"⚡ <b>OMNIPOTENT Downloader Prepared:</b>\n"
+                                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                                            f"📄 <b>File:</b> <code>{filename}</code>\n"
+                                            f"{icon} <b>Category:</b> {category_desc}\n"
+                                            f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
+                                            f"🚀 <b>Auto-Unrestrict Web Page Active</b>\n"
+                                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                        )
+                                        await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+
+                                        mode = "a+b" if status_tracker["downloaded"] > 0 else "wb"
+                                        last_chunk_time = time.time()
+                                        stalled = False
+
+                                        if status_tracker["downloaded"] == 0:
+                                            ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
+                                            if not ok_disk:
+                                                logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
+                                                needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
+                                                free_mb = f"{free_d / (1024*1024):.1f} MB"
+                                                reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
+                                                err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+                                                await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+                                                return
+
+                                        with open(file_path, mode) as f:
+                                            if status_tracker["downloaded"] > 0:
+                                                f.seek(status_tracker["downloaded"])
+                                            
+                                            async for chunk in resp.aiter_content(512 * 1024):
+                                                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                                                    await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                                    return
+                                                if chunk:
+                                                    f.write(chunk)
+                                                    status_tracker["downloaded"] += len(chunk)
+                                                    last_chunk_time = time.time()
+                                                    
+                                                    await progress_bar(
+                                                        status_tracker["downloaded"],
+                                                        total_size,
+                                                        tr(lang, "downloading"),
+                                                        status_msg,
+                                                        dl_start_time,
+                                                        last_update,
+                                                        icon="⚡",
+                                                        task_id=task_id,
+                                                        lang=lang
+                                                    )
+                                                
+                                                if (time.time() - last_chunk_time) > 15.0:
+                                                    logger.warning(f"⚠️ Stream stalled for 15s. Auto-Resuming from byte {status_tracker['downloaded']}...")
+                                                    stalled = True
+                                                    break
+
+                                        if not stalled:
+                                            download_success = True
+                                            break
+                            except Exception as unverified_curl_err:
+                                logger.warning(f"Unverified curl_cffi retry failed: {unverified_curl_err}")
+                            break
+                        else:
+                            logger.warning(f"Connection retry {retry_idx} error: {ex}")
+                            await asyncio.sleep(1.0)
 
         if not download_success and not ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
             if custom_cookie:
                 headers["Cookie"] = custom_cookie
-            async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
-                async with session.get(direct_url, headers=headers, allow_redirects=True) as response:
-                    if response.status not in (200, 206):
-                        await safe_edit_text(status_msg, f"❌ <b>URL Error: Server responded with status {response.status}</b>", parse_mode=ParseMode.HTML)
-                        return
-                    
-                    content_length = response.headers.get("Content-Length")
-                    total_size = int(content_length) if content_length and content_length.isdigit() else 0
-                    
-                    extracted_filename = smart_extract_filename(direct_url, response.headers)
-                    _, ext = os.path.splitext(extracted_filename)
-                    raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
-                    filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
+
+            async def _perform_aiohttp_download(ssl_disabled: bool = False):
+                nonlocal file_path, filename, icon, category_desc, is_video_type, download_success
+                connector = aiohttp.TCPConnector(ssl=False) if ssl_disabled else aiohttp.TCPConnector()
+                req_ssl = False if ssl_disabled else None
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout, auto_decompress=False) as session:
+                    async with session.get(direct_url, headers=headers, allow_redirects=True, ssl=req_ssl) as response:
+                        if response.status not in (200, 206):
+                            await safe_edit_text(status_msg, f"❌ <b>URL Error: Server responded with status {response.status}</b>", parse_mode=ParseMode.HTML)
+                            return
+                        
+                        content_length = response.headers.get("Content-Length")
+                        total_size = int(content_length) if content_length and content_length.isdigit() else 0
+                        
+                        extracted_filename = smart_extract_filename(direct_url, response.headers)
+                        _, ext = os.path.splitext(extracted_filename)
+                        raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
+                        filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
+                        if task_id in ACTIVE_TASKS:
+                            ACTIVE_TASKS[task_id]["filename"] = filename
+                        icon, category_desc, is_video_type = get_god_category(filename)
+                        file_path = os.path.join(DOWNLOAD_DIR, filename)
+
+                        ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
+                        if not ok_disk:
+                            logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
+                            needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
+                            free_mb = f"{free_d / (1024*1024):.1f} MB"
+                            reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
+                            err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+                            await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+                            return
+
+                        with open(file_path, "wb") as f:
+                            async for chunk in response.content.iter_chunked(512 * 1024):
+                                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                                    await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                    return
+
+                                if chunk:
+                                    f.write(chunk)
+                                    status_tracker["downloaded"] += len(chunk)
+                                    await progress_bar(
+                                        status_tracker["downloaded"],
+                                        total_size,
+                                        tr(lang, "downloading"),
+                                        status_msg,
+                                        dl_start_time,
+                                        last_update,
+                                        icon="⚡",
+                                        task_id=task_id,
+                                        lang=lang
+                                    )
+                        download_success = True
+
+            try:
+                await _perform_aiohttp_download(ssl_disabled=False)
+            except Exception as e:
+                if is_cert_verification_error(e) and not ssl_unverified_used:
+                    host_name = parsed_url.netloc or parsed_url.hostname or direct_url
+                    logger.warning(
+                        f"TLS certificate verification failed for host {host_name} ({e}). "
+                        f"Retrying once with TLS verification disabled."
+                    )
+                    ssl_unverified_used = True
                     if task_id in ACTIVE_TASKS:
-                        ACTIVE_TASKS[task_id]["filename"] = filename
-                    icon, category_desc, is_video_type = get_god_category(filename)
-                    file_path = os.path.join(DOWNLOAD_DIR, filename)
-
-                    ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
-                    if not ok_disk:
-                        logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
-                        needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
-                        free_mb = f"{free_d / (1024*1024):.1f} MB"
-                        reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
-                        err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                        await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
-                        return
-
-                    with open(file_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(512 * 1024):
-                            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                                await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
-                                return
-
-                            if chunk:
-                                f.write(chunk)
-                                status_tracker["downloaded"] += len(chunk)
-                                await progress_bar(
-                                    status_tracker["downloaded"],
-                                    total_size,
-                                    tr(lang, "downloading"),
-                                    status_msg,
-                                    dl_start_time,
-                                    last_update,
-                                    icon="⚡",
-                                    task_id=task_id,
-                                    lang=lang
-                                )
-                    download_success = True
+                        ACTIVE_TASKS[task_id]["ssl_unverified"] = True
+                    if file_path and os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                        except Exception:
+                            pass
+                    status_tracker["downloaded"] = 0
+                    await _perform_aiohttp_download(ssl_disabled=True)
+                else:
+                    raise e
         
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
 
         if not file_path or not os.path.exists(file_path) or actual_file_size == 0:
+            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                return
             await safe_edit_text(
                 status_msg,
                 "❌ <b>Download Failed:</b>\n"
@@ -5087,6 +5340,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
                 direct_url, "-o", file_path
             ]
+            if ssl_unverified_used:
+                curl_cmd.append("-k")
             if referer_header:
                 curl_cmd.extend(["-H", f"Referer: {referer_header}"])
 
@@ -5216,6 +5471,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 await status_msg.delete()
 
                 dest_text = f"القناة ({CHANNEL_ID})" if CHANNEL_ID else "الرسائل المحفوظة (Saved Messages)"
+                extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""
                 success_card = (
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"👑 <b>تم رفع الملف كاملاً بـ Telegram Premium بنجاح!</b>\n"
@@ -5225,7 +5481,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} (ملف واحد كامل)</code>\n"
                     f"📍 <b>مكان الإرسال:</b> <code>{dest_text}</code>\n"
                     f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
+                    f"{extra_ssl_line}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
@@ -5281,6 +5538,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 db_add_history(user_id, filename, actual_file_size, category_desc)
                 await status_msg.delete()
 
+                extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""
                 success_card = (
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{tr(lang, 'success_title')}\n"
@@ -5289,7 +5547,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     f"{icon} {tr(lang, 'category')} {category_desc}\n"
                     f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} ({num_parts} Parts)</code>\n"
                     f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
+                    f"{extra_ssl_line}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
@@ -5353,6 +5612,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         db_add_history(user_id, filename, actual_file_size, category_desc)
         await status_msg.delete()
         
+        extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""
         success_card = (
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"{tr(lang, 'success_title')}\n"
@@ -5361,7 +5621,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             f"{icon} {tr(lang, 'category')} {category_desc}\n"
             f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
             f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-            f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+            f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
+            f"{extra_ssl_line}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
