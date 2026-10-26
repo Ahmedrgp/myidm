@@ -86,7 +86,28 @@ API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 PORT = int(os.environ.get("PORT", 8080))
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 0)) if os.environ.get("ADMIN_ID", "").strip().isdigit() else 0
+# حسابات المالك المصرح لها حصرياً (Private Owner Access)
+ADMIN_IDS = {1594244556, 7639267441}
+_env_admin = os.environ.get("ADMIN_ID", "").strip()
+if _env_admin:
+    for _aid in _env_admin.replace(";", ",").split(","):
+        if _aid.strip().isdigit():
+            ADMIN_IDS.add(int(_aid.strip()))
+
+ADMIN_ID = 1594244556
+
+def is_admin(user_id: int) -> bool:
+    if not ADMIN_IDS:
+        return True
+    return user_id in ADMIN_IDS
+
+def _owner_filter(_, __, message):
+    if not ADMIN_IDS:
+        return True
+    uid = message.from_user.id if message.from_user else 0
+    return uid in ADMIN_IDS
+
+owner_filter = filters.create(_owner_filter, name="OwnerFilter")
 
 USER_SESSION_STRING = (os.environ.get("USER_SESSION_STRING", "") or os.environ.get("PREMIUM_SESSION", "")).strip().strip("'\"")
 
@@ -269,7 +290,11 @@ TEXTS = {
 # ==========================================
 # 3. إدارة وتحديث قاعدة البيانات الدائمة
 # ==========================================
-ALLOWED_USER_SETTINGS = {"upload_mode", "enable_thumbs", "enable_caption", "fast_speed", "god_threads", "lang", "clean_tags", "custom_prefix", "custom_suffix"}
+ALLOWED_USER_SETTINGS = {
+    "upload_mode", "enable_thumbs", "enable_caption", "fast_speed",
+    "god_threads", "lang", "clean_tags", "custom_prefix", "custom_suffix",
+    "channel_tag", "brand_position", "channel_button"
+}
 
 def init_db():
     conn = sqlite3.connect(DB_FILE, timeout=30)
@@ -294,7 +319,10 @@ def init_db():
             lang TEXT DEFAULT 'ar',
             clean_tags INTEGER DEFAULT 1,
             custom_prefix TEXT DEFAULT '',
-            custom_suffix TEXT DEFAULT ''
+            custom_suffix TEXT DEFAULT '',
+            channel_tag TEXT DEFAULT '',
+            brand_position TEXT DEFAULT 'suffix',
+            channel_button INTEGER DEFAULT 1
         )
     """)
     
@@ -331,7 +359,10 @@ def init_db():
         ("lang", "TEXT DEFAULT 'ar'"),
         ("clean_tags", "INTEGER DEFAULT 1"),
         ("custom_prefix", "TEXT DEFAULT ''"),
-        ("custom_suffix", "TEXT DEFAULT ''")
+        ("custom_suffix", "TEXT DEFAULT ''"),
+        ("channel_tag", "TEXT DEFAULT ''"),
+        ("brand_position", "TEXT DEFAULT 'suffix'"),
+        ("channel_button", "INTEGER DEFAULT 1")
     ]:
         try:
             cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
@@ -362,7 +393,7 @@ def db_get_user_settings(user_id: int) -> dict:
     try:
         cursor.execute("""
             SELECT upload_mode, enable_thumbs, enable_caption, fast_speed, god_threads, lang,
-                   clean_tags, custom_prefix, custom_suffix
+                   clean_tags, custom_prefix, custom_suffix, channel_tag, brand_position, channel_button
             FROM users WHERE user_id = ?
         """, (user_id,))
         row = cursor.fetchone()
@@ -371,7 +402,7 @@ def db_get_user_settings(user_id: int) -> dict:
     conn.close()
     if row:
         return {
-            "upload_mode": row[0],
+            "upload_mode": row[0] or "auto",
             "enable_thumbs": row[1] if row[1] is not None else 1,
             "enable_caption": row[2] if row[2] is not None else 1,
             "fast_speed": row[3] if row[3] is not None else 1,
@@ -379,7 +410,10 @@ def db_get_user_settings(user_id: int) -> dict:
             "lang": row[5] or "ar",
             "clean_tags": row[6] if row[6] is not None else 1,
             "custom_prefix": row[7] or "",
-            "custom_suffix": row[8] or ""
+            "custom_suffix": row[8] or "",
+            "channel_tag": (row[9] if len(row) > 9 and row[9] is not None else "") or "",
+            "brand_position": (row[10] if len(row) > 10 and row[10] is not None else "suffix") or "suffix",
+            "channel_button": (row[11] if len(row) > 11 and row[11] is not None else 1)
         }
     return {
         "upload_mode": "auto",
@@ -390,7 +424,10 @@ def db_get_user_settings(user_id: int) -> dict:
         "lang": "ar",
         "clean_tags": 1,
         "custom_prefix": "",
-        "custom_suffix": ""
+        "custom_suffix": "",
+        "channel_tag": "",
+        "brand_position": "suffix",
+        "channel_button": 1
     }
 
 def db_add_replacement(user_id: int, find_text: str, replace_text: str):
@@ -1416,15 +1453,27 @@ def clean_and_rename_filename(raw_filename: str, user_id: int = 0) -> str:
     
     # 1. إزالة الإعلانات والوسوم الدعائية تلقائياً إذا كانت مفعلة
     if clean_tags:
+        tlds = r'(?:com|ru|net|org|to|io|me|site|online|store|vip|cc|xyz|app|club|info|biz)'
         # إزالة وسوم الإعلانات المحصورة بين أقواس أولاً
         name_part = re.sub(r'(?i)\[(?:TG|telegram|official|channel)[^\]]*\]', '', name_part)
         name_part = re.sub(r'(?i)\((?:TG|telegram|official|channel)[^)]*\)', '', name_part)
         name_part = re.sub(r'(?i)\{(?:TG|telegram|official|channel)[^}]*\}', '', name_part)
-        # إزالة الروابط: www.site.com, site.com, t.me/xxx, https://...
-        name_part = re.sub(r'(?i)(?:https?://|www\.)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', name_part)
+        # إزالة أي أقواس تحتوي على روابط أو أسماء مواقع (مثل [an1.com] أو (5play.ru))
+        name_part = re.sub(r'(?i)\[[^\]]*\.' + tlds + r'[^\]]*\]', '', name_part)
+        name_part = re.sub(r'(?i)\([^)]*\.' + tlds + r'[^)]*\)', '', name_part)
+        name_part = re.sub(r'(?i)\{[^}]*\.' + tlds + r'[^}]*\}', '', name_part)
+        # إزالة الروابط الكاملة: www.site.com, site.com, t.me/xxx, https://...
+        name_part = re.sub(r'(?i)(?:https?://|www\.)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?', '', name_part)
         name_part = re.sub(r'(?i)(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+', '', name_part)
         # إزالة الإشارات: @ChannelName
-        name_part = re.sub(r'@[a-zA-Z0-9]+', '', name_part)
+        name_part = re.sub(r'@[a-zA-Z0-9_]+', '', name_part)
+        # ✅ إزالة نطاقات المواقع الروسية والعالمية المضمنة في أسماء الملفات (مثل: -an1.com, _5play.ru, -androeed.ru, -apkpure.com, إلخ)
+        # مسبوقة بفاصل (- أو _ أو مسافة) ويليها النطاق
+        name_part = re.sub(r'(?i)[-_\s]+[a-zA-Z0-9-]+\.' + tlds + r'(?:\b|$)', '', name_part)
+        # حالة وجود النطاق في بداية الاسم (مثل: an1.com_Subway_Surfers)
+        name_part = re.sub(r'(?i)^[a-zA-Z0-9-]+\.' + tlds + r'[-_\s.]+', '', name_part)
+        # إزالة أسماء أشهر مواقع المود الشائعة إذا وجدت مفصولة حتى لو بدون امتداد
+        name_part = re.sub(r'(?i)[-_\s]+(?:an1|5play|androeed|lenov|pdalife|apkmody|apkpure|rexdl|revdl|happymod|moddroid|playmods)(?=[-_\s]|$)', '', name_part)
 
     # 2. تطبيق قواعد الاستبدال المخصصة المحددة من المستخدم/المسؤول
     if user_id:
@@ -1441,7 +1490,18 @@ def clean_and_rename_filename(raw_filename: str, user_id: int = 0) -> str:
     if not name_part:
         name_part = f"file_{int(time.time())}"
 
-    # 4. تطبيق البادئة واللاحقة المخصصة
+    # 4. تطبيق حقوق القناة التلقائية (Auto-Branding) والبادئة واللاحقة المخصصة
+    channel_tag = st.get("channel_tag", "").strip()
+    brand_position = st.get("brand_position", "suffix")
+    
+    # تطبيق وسم القناة التلقائي إذا لم تكن هناك لاحقة/بادئة يدوية تتعارض
+    if channel_tag:
+        clean_tag = channel_tag if channel_tag.startswith("@") or channel_tag.startswith("http") else f"@{channel_tag}"
+        if brand_position == "suffix" and not suffix:
+            name_part = f"{name_part} {clean_tag}".strip()
+        elif brand_position == "prefix" and not prefix:
+            name_part = f"[{clean_tag}] {name_part}".strip()
+
     if prefix:
         name_part = f"{prefix.strip()} {name_part}".strip()
     if suffix:
@@ -1548,7 +1608,24 @@ def make_settings_keyboard(user_id: int):
         [InlineKeyboardButton(threads_str, callback_data="toggle_threads")],
         [InlineKeyboardButton(caption_str, callback_data="toggle_caption"), InlineKeyboardButton(thumbs_str, callback_data="toggle_thumbs")],
         [InlineKeyboardButton(clean_str, callback_data="toggle_cleantags")],
+        [InlineKeyboardButton("👑 حقوق القناة (Auto-Branding)", callback_data="btn_open_brand")],
         [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
+    ])
+
+def make_brand_keyboard(user_id: int):
+    st = db_get_user_settings(user_id)
+    b_pos = st.get("brand_position", "suffix")
+    pos_desc = "في النهاية (Suffix)" if b_pos == "suffix" else ("في البداية (Prefix)" if b_pos == "prefix" else "معطل ❌")
+    pos_text = f"🏷️ موضع الاسم: {pos_desc}"
+    btn_state = "🔘 زر القناة بالملف: مفعل ✅" if st.get("channel_button", 1) else "🔘 زر القناة بالملف: معطل ❌"
+    cur_ch = st.get("channel_tag") or "غير محدد ❌"
+    
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📢 القناة: {cur_ch}", callback_data="btn_brand_help")],
+        [InlineKeyboardButton(pos_text, callback_data="toggle_brand_pos")],
+        [InlineKeyboardButton(btn_state, callback_data="toggle_brand_btn")],
+        [InlineKeyboardButton("🗑️ مسح القناة والحقوق", callback_data="btn_clear_brand")],
+        [InlineKeyboardButton("🔙 العودة للإعدادات", callback_data="btn_settings")]
     ])
 
 def make_back_keyboard(lang: str = "ar"):
@@ -1622,21 +1699,26 @@ async def progress_bar(current: int, total: int, status_text: str, message: Mess
 @bot.on_message(filters.command("start"))
 async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        await message.reply_text("⛔ <b>عذراً، هذا البوت خاص ومخصص للاستخدام الشخصي للمالك فقط.</b>", parse_mode=ParseMode.HTML)
+        return
     db_add_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
     st = db_get_user_settings(user_id)
     sender = message.from_user.first_name if message.from_user else 'Master'
-    is_admin = bool(ADMIN_ID and user_id == ADMIN_ID)
+    is_admin_user = is_admin(user_id)
     
     welcome_text = tr(st["lang"], "welcome", name=sender)
     try:
-        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin), parse_mode=ParseMode.HTML)
+        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin_user), parse_mode=ParseMode.HTML)
     except FloodWait as e:
         await asyncio.sleep(e.value + 1)
-        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin), parse_mode=ParseMode.HTML)
+        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin_user), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("god") | filters.command("godmode") | filters.command("omnipotent"))
 async def god_panel_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     st = db_get_user_settings(user_id)
     g_stats = db_get_global_stats()
     
@@ -1650,6 +1732,8 @@ async def god_panel_handler(client: Client, message: Message):
 @bot.on_message(filters.command("probe"))
 async def probe_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     st = db_get_user_settings(user_id)
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -1729,6 +1813,8 @@ async def probe_command_handler(client: Client, message: Message):
 @bot.on_message(filters.command("settings") | filters.command("lang"))
 async def settings_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     st = db_get_user_settings(user_id)
     await message.reply_text(
         tr(st["lang"], "settings_title"),
@@ -1739,12 +1825,16 @@ async def settings_command_handler(client: Client, message: Message):
 @bot.on_message(filters.command("help"))
 async def help_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     st = db_get_user_settings(user_id)
     await message.reply_text(tr(st["lang"], "help_text"), reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("stats"))
 async def stats_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     st = db_get_user_settings(user_id)
     g_stats = db_get_global_stats()
     queue_size = request_queue.qsize()
@@ -1765,6 +1855,8 @@ async def stats_command_handler(client: Client, message: Message):
 @bot.on_message(filters.command("history"))
 async def history_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     st = db_get_user_settings(user_id)
     history_list = db_get_history(user_id, limit=10)
     
@@ -1782,7 +1874,7 @@ async def history_command_handler(client: Client, message: Message):
 @bot.on_message(filters.command("broadcast"))
 async def broadcast_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
-    if not ADMIN_ID or user_id != ADMIN_ID:
+    if not is_admin(user_id):
         await message.reply_text("⛔ <b>عذراً، هذا الأمر مخصص للمسؤول فقط!</b>", parse_mode=ParseMode.HTML)
         return
 
@@ -1841,7 +1933,7 @@ async def broadcast_command_handler(client: Client, message: Message):
 @bot.on_message(filters.command("dashboard"))
 async def dashboard_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
-    if not ADMIN_ID or user_id != ADMIN_ID:
+    if not is_admin(user_id):
         await message.reply_text("⛔ <b>عذراً، لوحة تحكم الويب مخصصة لمالك البوت فقط!</b>", parse_mode=ParseMode.HTML)
         return
     dash_url = f"http://localhost:{PORT}/dashboard?key={DASHBOARD_SECRET}"
@@ -1865,6 +1957,8 @@ async def dashboard_command_handler(client: Client, message: Message):
 @bot.on_message(filters.command(["set_prefix", "prefix"]))
 async def set_prefix_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.reply_text("🏷️ <b>الاستخدام:</b> <code>/set_prefix [بادئة الاسم]</code>\nمثال: <code>/set_prefix @MyChannel -</code>", parse_mode=ParseMode.HTML)
@@ -1876,12 +1970,16 @@ async def set_prefix_handler(client: Client, message: Message):
 @bot.on_message(filters.command(["clear_prefix", "cleanprefix"]))
 async def clear_prefix_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     db_update_user_setting(user_id, "custom_prefix", "")
     await message.reply_text("✅ <b>تم حذف البادئة المخصصة بنجاح.</b>", parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command(["set_suffix", "suffix"]))
 async def set_suffix_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.reply_text("🏷️ <b>الاستخدام:</b> <code>/set_suffix [لاحقة الاسم]</code>\nمثال: <code>/set_suffix - @MyChannel</code>", parse_mode=ParseMode.HTML)
@@ -1893,12 +1991,16 @@ async def set_suffix_handler(client: Client, message: Message):
 @bot.on_message(filters.command(["clear_suffix", "cleansuffix"]))
 async def clear_suffix_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     db_update_user_setting(user_id, "custom_suffix", "")
     await message.reply_text("✅ <b>تم حذف اللاحقة المخصصة بنجاح.</b>", parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("replace"))
 async def replace_command_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     args = message.text.replace("/replace", "", 1).strip()
     if "|" not in args:
         await message.reply_text(
@@ -1922,6 +2024,8 @@ async def replace_command_handler(client: Client, message: Message):
 @bot.on_message(filters.command(["replacements", "rules"]))
 async def list_replacements_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     rules = db_get_user_replacements(user_id)
     st = db_get_user_settings(user_id)
     clean_state = "✅ مفعل" if st.get("clean_tags", 1) else "❌ معطل"
@@ -1952,14 +2056,68 @@ async def list_replacements_handler(client: Client, message: Message):
 @bot.on_message(filters.command("clear_replacements"))
 async def clear_replacements_handler(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     db_clear_user_replacements(user_id)
     await message.reply_text("✅ <b>تم مسح جميع قواعد استبدال النصوص الخاصة بك بنجاح.</b>", parse_mode=ParseMode.HTML)
+
+@bot.on_message(filters.command(["brand", "branding", "set_brand", "set_channel", "channel"]))
+async def brand_command_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1:
+        new_brand = args[1].strip()
+        if not new_brand.startswith("@") and not new_brand.startswith("http"):
+            new_brand = f"@{new_brand}"
+        db_update_user_setting(user_id, "channel_tag", new_brand)
+        await message.reply_text(
+            f"👑 <b>تم تفعيل حقوق القناة التلقائية بنجاح! (Auto-Branding)</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📢 <b>القناة المعتمدة:</b> <code>{new_brand}</code>\n"
+            f"🏷️ <b>الموضع في الاسم:</b> <code>في النهاية (Suffix)</code>\n"
+            f"🔘 <b>الزر التفاعلي بالقناة:</b> <code>مفعل ✅</code>\n"
+            f"📝 <b>الحقوق في الكابشن:</b> <code>مفعلة ✅</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 <i>أي لعبة أو ملف تحمله الآن سيحمل حقوق قناتك تلقائياً!</i>\n"
+            f"لإدارة خيارات العرض أرسل أمر <code>/brand</code> في أي وقت.",
+            reply_markup=make_brand_keyboard(user_id),
+            parse_mode=ParseMode.HTML
+        )
+        return
+    
+    st = db_get_user_settings(user_id)
+    cur_brand = st.get("channel_tag") or "غير محدد ❌"
+    await message.reply_text(
+        f"👑 <b>لوحة إدارة حقوق القناة التلقائية (Auto-Branding):</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📢 <b>القناة الحالية:</b> <code>{cur_brand}</code>\n\n"
+        f"💡 <b>طريقة الاستخدام السريع:</b>\n"
+        f"• لتعيين القناة: <code>/brand @اسم_قناتك</code>\n"
+        f"• لحذف الحقوق: <code>/clear_brand</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"تحكم في كيفية ظهور حقوق قناتك عبر الأزرار أدناه:",
+        reply_markup=make_brand_keyboard(user_id),
+        parse_mode=ParseMode.HTML
+    )
+
+@bot.on_message(filters.command(["clear_brand", "clear_channel"]))
+async def clear_brand_handler(client: Client, message: Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
+    db_update_user_setting(user_id, "channel_tag", "")
+    await message.reply_text("✅ <b>تم حذف حقوق القناة التلقائية بنجاح. ستنزل الملفات بدون وسم القناة.</b>", parse_mode=ParseMode.HTML)
 
 @bot.on_callback_query()
 async def callback_handler(client: Client, query: CallbackQuery):
     try:
         data = query.data
         user_id = query.from_user.id if query.from_user else 0
+        if not is_admin(user_id):
+            await query.answer("⛔ ليس لديك صلاحية لاستخدام هذا البوت.", show_alert=True)
+            return
         st = db_get_user_settings(user_id)
         lang = st["lang"]
         
@@ -2016,13 +2174,63 @@ async def callback_handler(client: Client, query: CallbackQuery):
             await query.answer("Tag cleaner updated / تم تحديث تفضيل تنظيف الوسوم!")
             return
 
+        elif data == "btn_open_brand":
+            st = db_get_user_settings(user_id)
+            cur_brand = st.get("channel_tag") or "غير محدد ❌"
+            await query.message.edit_text(
+                f"👑 <b>لوحة إدارة حقوق القناة التلقائية (Auto-Branding):</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📢 <b>القناة الحالية:</b> <code>{cur_brand}</code>\n\n"
+                f"💡 <b>طريقة التعيين:</b>\n"
+                f"أرسل أمر: <code>/brand @اسم_قناتك</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"تحكم في كيفية ظهور حقوق قناتك عبر الأزرار أدناه:",
+                reply_markup=make_brand_keyboard(user_id),
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        elif data == "btn_brand_help":
+            await query.answer("لتغيير القناة، أرسل الأمر: /brand @اسم_قناتك", show_alert=True)
+            return
+
+        elif data == "toggle_brand_pos":
+            pos_modes = ["suffix", "prefix", "none"]
+            cur_pos = st.get("brand_position", "suffix")
+            new_pos = pos_modes[(pos_modes.index(cur_pos) + 1) % len(pos_modes)] if cur_pos in pos_modes else "suffix"
+            db_update_user_setting(user_id, "brand_position", new_pos)
+            await query.message.edit_reply_markup(reply_markup=make_brand_keyboard(user_id))
+            await query.answer(f"تم تغيير موضع الاسم إلى: {new_pos}!")
+            return
+
+        elif data == "toggle_brand_btn":
+            new_val = 0 if st.get("channel_button", 1) else 1
+            db_update_user_setting(user_id, "channel_button", new_val)
+            await query.message.edit_reply_markup(reply_markup=make_brand_keyboard(user_id))
+            await query.answer("تم تحديث حالة زر القناة التفاعلي!")
+            return
+
+        elif data == "btn_clear_brand":
+            db_update_user_setting(user_id, "channel_tag", "")
+            await query.message.edit_reply_markup(reply_markup=make_brand_keyboard(user_id))
+            await query.answer("تم حذف وسم القناة!", show_alert=True)
+            return
+
+        elif data == "btn_settings":
+            await query.message.edit_text(
+                tr(st["lang"], "settings_title"),
+                reply_markup=make_settings_keyboard(user_id),
+                parse_mode=ParseMode.HTML
+            )
+            return
+
         if data == "btn_start":
             sender = query.from_user.first_name if query.from_user else 'Master'
-            is_admin = bool(ADMIN_ID and user_id == ADMIN_ID)
-            await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=make_start_keyboard(lang, is_admin=is_admin), parse_mode=ParseMode.HTML)
+            is_admin_user = is_admin(user_id)
+            await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=make_start_keyboard(lang, is_admin=is_admin_user), parse_mode=ParseMode.HTML)
 
         elif data == "btn_admin_panel":
-            if not ADMIN_ID or user_id != ADMIN_ID:
+            if not is_admin(user_id):
                 await query.answer("⛔ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
                 return
             g_stats = db_get_global_stats()
@@ -2048,7 +2256,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
             await query.message.edit_text(admin_card, reply_markup=admin_kbd, parse_mode=ParseMode.HTML)
 
         elif data == "btn_get_dashboard":
-            if not ADMIN_ID or user_id != ADMIN_ID:
+            if not is_admin(user_id):
                 await query.answer("⛔ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
                 return
             dash_url = f"http://localhost:{PORT}/dashboard?key={DASHBOARD_SECRET}"
@@ -2132,6 +2340,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
 @bot.on_message(filters.document & ~filters.service)
 async def handle_document_torrent(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     if user_id:
         db_add_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
 
@@ -2147,11 +2357,13 @@ async def handle_document_torrent(client: Client, message: Message):
 @bot.on_message((filters.text | filters.caption) & ~filters.service)
 async def handle_all_messages(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
     if user_id:
         db_add_user(user_id, message.from_user.username or "", message.from_user.first_name or "")
 
     msg_time = message.date.timestamp() if message.date else 0
-    if msg_time and (time.time() - msg_time) > 45:
+    if msg_time and (time.time() - msg_time) > 300:
         return
 
     text = (message.text or message.caption or "").strip()
@@ -2160,7 +2372,7 @@ async def handle_all_messages(client: Client, message: Message):
 
     if text.startswith("/"):
         if text.startswith("/eval"):
-            if not ADMIN_ID or user_id != ADMIN_ID:
+            if not is_admin(user_id):
                 await message.reply_text("⛔ <b>غير مصرح لك باستخدام هذا الأمر! (Admin Only)</b>", parse_mode=ParseMode.HTML)
                 return
             code = text.replace("/eval", "", 1).strip()
@@ -2368,7 +2580,7 @@ async def process_single_local_file_upload(file_path: str, filename: str, actual
     async def pyrogram_progress(current, total):
         await progress_bar(current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang)
 
-    caption = (f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>") if settings.get("enable_caption", 1) else ""
+    caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id)
     
     thumb_path = None
     duration, width, height = 0, 0, 0
@@ -2384,6 +2596,7 @@ async def process_single_local_file_upload(file_path: str, filename: str, actual
                 "progress": pyrogram_progress,
                 "parse_mode": ParseMode.HTML
             }
+            if brand_markup: kwargs["reply_markup"] = brand_markup
             if thumb_path and os.path.exists(thumb_path): kwargs["thumb"] = thumb_path
             if duration > 0: kwargs["duration"] = duration
             if width > 0 and height > 0:
@@ -2391,7 +2604,14 @@ async def process_single_local_file_upload(file_path: str, filename: str, actual
                 kwargs["height"] = height
             await user_msg.reply_video(**kwargs)
         else:
-            await user_msg.reply_document(document=file_path, caption=caption, progress=pyrogram_progress, parse_mode=ParseMode.HTML)
+            kwargs = {
+                "document": file_path,
+                "caption": caption,
+                "progress": pyrogram_progress,
+                "parse_mode": ParseMode.HTML
+            }
+            if brand_markup: kwargs["reply_markup"] = brand_markup
+            await user_msg.reply_document(**kwargs)
     finally:
         if thumb_path and os.path.exists(thumb_path):
             try: os.remove(thumb_path)
@@ -2984,7 +3204,38 @@ async def extract_video_metadata(video_path: str):
 
     return thumb_path, duration, width, height
 
-async def resilient_send_media(client, chat_id, file_path, caption, is_video, progress_cb=None, thumb=None, duration=0, width=0, height=0):
+def build_file_caption(filename: str, file_size: int, category_desc: str, icon: str, user_id: int, custom_caption: str = None) -> tuple:
+    """بناء كابشن احترافي مع زر الحقوق التلقائي للقناة (Auto-Branding)"""
+    st = db_get_user_settings(user_id) if user_id else {}
+    if custom_caption:
+        caption = custom_caption
+    elif not st.get("enable_caption", 1):
+        caption = ""
+    else:
+        channel_tag = st.get("channel_tag", "").strip()
+        caption_lines = [
+            f"🎮 <b>File:</b> <code>{filename}</code>",
+            f"{icon} <b>Category:</b> {category_desc}",
+            f"📊 <b>Size:</b> <code>{humanbytes(file_size)}</code>"
+        ]
+        if channel_tag:
+            formatted_channel = f"@{channel_tag.lstrip('@')}" if not channel_tag.startswith("http") else channel_tag
+            caption_lines.append(f"👑 <b>Channel:</b> {formatted_channel}")
+            caption_lines.append("⚡ <i>Direct Fast Download | تحميل فائق السرعة</i>")
+        
+        caption = "\n".join(caption_lines)
+    
+    reply_markup = None
+    channel_tag = st.get("channel_tag", "").strip()
+    if channel_tag and st.get("channel_button", 1):
+        ch_clean = channel_tag.lstrip("@").replace("https://t.me/", "").replace("t.me/", "").strip()
+        ch_url = f"https://t.me/{ch_clean}" if not channel_tag.startswith("http") else channel_tag
+        ch_btn_text = f"📢 انضم لقناتنا ({channel_tag})" if not channel_tag.startswith("http") else "📢 انضم للقناة الرسمية"
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(ch_btn_text, url=ch_url)]])
+        
+    return caption, reply_markup
+
+async def resilient_send_media(client, chat_id, file_path, caption, is_video, progress_cb=None, thumb=None, duration=0, width=0, height=0, reply_markup=None):
     max_retries = 4
     for attempt in range(max_retries):
         try:
@@ -2997,6 +3248,8 @@ async def resilient_send_media(client, chat_id, file_path, caption, is_video, pr
                     "progress": progress_cb,
                     "parse_mode": ParseMode.HTML
                 }
+                if reply_markup:
+                    kwargs["reply_markup"] = reply_markup
                 if thumb and os.path.exists(thumb):
                     kwargs["thumb"] = thumb
                 if duration > 0:
@@ -3006,13 +3259,16 @@ async def resilient_send_media(client, chat_id, file_path, caption, is_video, pr
                     kwargs["height"] = height
                 return await client.send_video(**kwargs)
             else:
-                return await client.send_document(
-                    chat_id=chat_id,
-                    document=file_path,
-                    caption=caption,
-                    progress=progress_cb,
-                    parse_mode=ParseMode.HTML
-                )
+                kwargs = {
+                    "chat_id": chat_id,
+                    "document": file_path,
+                    "caption": caption,
+                    "progress": progress_cb,
+                    "parse_mode": ParseMode.HTML
+                }
+                if reply_markup:
+                    kwargs["reply_markup"] = reply_markup
+                return await client.send_document(**kwargs)
         except FloodWait as fw:
             logger.warning(f"Telegram FloodWait during upload: {fw.value}s - waiting...")
             await asyncio.sleep(fw.value + 1)
@@ -3407,12 +3663,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         current, total, "👑 Premium Uploading", status_msg, up_start_time, last_update, icon="⚡", task_id=task_id, lang=lang
                     )
 
-                if custom_caption:
-                    caption = custom_caption
-                elif settings.get("enable_caption", 1):
-                    caption = f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
-                else:
-                    caption = ""
+                caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
                 
                 target_chat = CHANNEL_ID if CHANNEL_ID else "me"
                 is_vid = is_video_type and settings["upload_mode"] != "doc"
@@ -3420,10 +3671,10 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 if is_vid and settings.get("enable_thumbs", 1):
                     thumb_path, duration, width, height = await extract_video_metadata(file_path)
                 try:
-                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height)
+                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
                 except Exception as prem_upload_err:
                     logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
-                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height)
+                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
 
                 total_time_spent = round(time.time() - start_time)
                 avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
@@ -3509,12 +3760,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
             )
 
-        if custom_caption:
-            caption = custom_caption
-        elif settings.get("enable_caption", 1):
-            caption = f"📄 <b>File:</b> <code>{filename}</code>\n{icon} <b>Category:</b> {category_desc}\n📊 <b>Size:</b> <code>{humanbytes(actual_file_size)}</code>"
-        else:
-            caption = ""
+        caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
 
         if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             await status_msg.edit_text("🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
@@ -3528,7 +3774,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             thumb_path, duration, width, height = await extract_video_metadata(file_path)
 
         # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت
-        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height)
+        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
@@ -3540,7 +3786,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         "video": file_path,
                         "caption": caption,
                         "supports_streaming": True,
-                        "parse_mode": ParseMode.HTML
+                        "parse_mode": ParseMode.HTML,
+                        "reply_markup": brand_markup
                     }
                     if thumb_path and os.path.exists(thumb_path): kwargs["thumb"] = thumb_path
                     if duration > 0: kwargs["duration"] = duration
@@ -3549,7 +3796,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         kwargs["height"] = height
                     await uploader.send_video(**kwargs)
                 else:
-                    await uploader.send_document(chat_id=CHANNEL_ID, document=file_path, caption=caption, parse_mode=ParseMode.HTML)
+                    await uploader.send_document(chat_id=CHANNEL_ID, document=file_path, caption=caption, reply_markup=brand_markup, parse_mode=ParseMode.HTML)
             except Exception as ch_err:
                 logger.warning(f"Channel upload notice: {ch_err}")
             
