@@ -129,14 +129,18 @@ class TestApkInspectionSuite(unittest.TestCase):
             await bot.handle_apk_inspection_card(non_apk_file, "file.zip", 12345, user_msg, lang="ar")
             user_msg.reply_text.assert_not_called()
 
-            # Real APK upload
+            # Real APK upload: emits inspection card then BLITZVERIFY block
             await bot.handle_apk_inspection_card(self.golden_v1, "golden_v1.apk", 12345, user_msg, lang="ar")
-            user_msg.reply_text.assert_called_once()
-            call_args = user_msg.reply_text.call_args[0]
-            card_text = call_args[0]
+            self.assertEqual(user_msg.reply_text.call_count, 2)
+            card_call = user_msg.reply_text.call_args_list[0]
+            block_call = user_msg.reply_text.call_args_list[1]
+            card_text = card_call[0][0]
+            block_text = block_call[0][0]
             self.assertIn("بطاقة فحص APK | APK Inspection", card_text)
             self.assertIn("android.appsecurity.cts.tinyapp", card_text)
             self.assertIn("FB5DBD3C669AF9FC236C6991E6387B7F11FF0590997F22D0F5C74FF40E04FCA8", card_text)
+            self.assertIn("BLITZVERIFY v1", block_text)
+            self.assertIn("package: android.appsecurity.cts.tinyapp", block_text)
 
         asyncio.run(run_pipeline_test())
 

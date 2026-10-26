@@ -2684,6 +2684,93 @@ def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") 
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
+def format_blitzverify_block(info: dict) -> str:
+    if not info:
+        return ""
+
+    def is_valid_val(val):
+        if val is None:
+            return False
+        s = str(val).strip()
+        if not s or s.lower() in ("unknown", "-", "n/a", "none"):
+            return False
+        return True
+
+    lines = ["BLITZVERIFY v1"]
+
+    # 1. package
+    pkg = info.get("package")
+    if is_valid_val(pkg):
+        lines.append(f"package: {str(pkg).strip()}")
+
+    # 2. version_name
+    vname = info.get("version_name")
+    if is_valid_val(vname):
+        lines.append(f"version_name: {str(vname).strip()}")
+
+    # 3. version_code
+    vcode = info.get("version_code")
+    if is_valid_val(vcode):
+        try:
+            lines.append(f"version_code: {int(vcode)}")
+        except (ValueError, TypeError):
+            pass
+
+    # 4. size_bytes
+    size_bytes = info.get("size_bytes")
+    if is_valid_val(size_bytes):
+        try:
+            lines.append(f"size_bytes: {int(size_bytes)}")
+        except (ValueError, TypeError):
+            pass
+
+    # 5. min_sdk
+    min_sdk = info.get("min_sdk")
+    if is_valid_val(min_sdk):
+        try:
+            lines.append(f"min_sdk: {int(min_sdk)}")
+        except (ValueError, TypeError):
+            pass
+
+    # 6. target_sdk
+    target_sdk = info.get("target_sdk")
+    if is_valid_val(target_sdk):
+        try:
+            lines.append(f"target_sdk: {int(target_sdk)}")
+        except (ValueError, TypeError):
+            pass
+
+    # 7. file_sha256
+    file_sha256 = info.get("file_sha256")
+    if is_valid_val(file_sha256):
+        f_sha = str(file_sha256).strip().replace(":", "").lower()
+        if f_sha and f_sha not in ("unknown", "-", "n/a", "none"):
+            lines.append(f"file_sha256: {f_sha}")
+
+    # 8. cert_sha256
+    cert_sha256 = info.get("cert_sha256")
+    if is_valid_val(cert_sha256):
+        c_sha = str(cert_sha256).strip().replace(":", "").lower()
+        if c_sha and c_sha not in ("unknown", "-", "n/a", "none"):
+            lines.append(f"cert_sha256: {c_sha}")
+
+    # 9. inspected_at
+    checked_at = info.get("checked_at")
+    if is_valid_val(checked_at):
+        try:
+            epoch = float(checked_at)
+            try:
+                tz = ZoneInfo("Africa/Cairo")
+            except Exception:
+                tz = datetime.timezone(datetime.timedelta(hours=3))
+            dt = datetime.datetime.fromtimestamp(epoch, tz=tz)
+            lines.append(f"inspected_at: {dt.strftime('%Y-%m-%d %H:%M')}")
+        except Exception:
+            pass
+
+    content = "\n".join(lines)
+    return f"```\n{content}\n```"
+
 def format_duplicate_warning_card(info: dict, prev: dict, lang: str = "ar") -> str:
     lines = []
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -2785,6 +2872,12 @@ async def handle_apk_inspection_card(file_path: str, filename: str, user_id: int
         card_text = format_apk_inspection_card(info, prev, lang=lang)
         if card_text:
             await user_msg.reply_text(card_text, parse_mode=ParseMode.HTML)
+            try:
+                block_text = format_blitzverify_block(info)
+                if block_text:
+                    await user_msg.reply_text(block_text, parse_mode=ParseMode.MARKDOWN)
+            except Exception as e_block:
+                logger.error(f"BLITZVERIFY block send failed: {e_block}", exc_info=True)
     except Exception as e:
         logger.error(f"APK inspection card failed silently: {e}", exc_info=True)
 
@@ -2841,9 +2934,6 @@ async def run_approved_pending_upload(pending_id: int, original_msg: Message):
             await status_msg.edit_text(f"❌ <b>Upload Error:</b> <code>{html.escape(str(e))}</code>", parse_mode=ParseMode.HTML)
         except Exception:
             pass
-            await user_msg.reply_text(card_text, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logger.error(f"APK inspection card failed silently: {e}", exc_info=True)
 
 # ==========================================
 # 9. معالجات الرسائل والأوامر المزدوجة
