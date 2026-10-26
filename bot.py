@@ -790,7 +790,7 @@ def cleanup_expired_pending_downloads():
     cursor = conn.cursor()
     cutoff = time.time() - (24 * 3600)
     try:
-        cursor.execute("SELECT id, file_path FROM pending_downloads WHERE created_at < ? AND status = 'pending'", (cutoff,))
+        cursor.execute("SELECT id, file_path FROM pending_downloads WHERE created_at < ? AND status IN ('pending', 'approved')", (cutoff,))
         rows = cursor.fetchall()
         for pid, fpath in rows:
             if fpath and os.path.exists(fpath):
@@ -2055,6 +2055,19 @@ async def progress_bar(current: int, total: int, status_text: str, message: Mess
     except (RPCError, MessageNotModified):
         pass
 
+async def safe_edit_text(message: Message | None, text: str, *args, **kwargs) -> Message | None:
+    """
+    Safely edits a Telegram message text, swallowing MessageNotModified
+    so that no-op or identical-text status edits never crash or abort execution.
+    """
+    if message is None:
+        return None
+    try:
+        return await message.edit_text(text, *args, **kwargs)
+    except MessageNotModified:
+        logger.debug(f"MessageNotModified swallowed on edit_text for message {getattr(message, 'id', None)}")
+        return message
+
 # ==========================================
 # 8.1. محرك فحص تطبيقات أندرويد (APK Inspection Card Engine - apkinspect)
 # ==========================================
@@ -2931,7 +2944,7 @@ async def run_approved_pending_upload(pending_id: int, original_msg: Message):
     except Exception as e:
         logger.error(f"Error uploading approved pending download {pending_id}: {e}", exc_info=True)
         try:
-            await status_msg.edit_text(f"❌ <b>Upload Error:</b> <code>{html.escape(str(e))}</code>", parse_mode=ParseMode.HTML)
+            await safe_edit_text(status_msg, f"❌ <b>Upload Error:</b> <code>{html.escape(str(e))}</code>", parse_mode=ParseMode.HTML)
         except Exception:
             pass
 
@@ -3730,14 +3743,15 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
     lang = st["lang"]
 
     if not TORRENTP_AVAILABLE:
-        await status_msg.edit_text("❌ <b>Torrent engine module missing (torrentp)!</b>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, "❌ <b>Torrent engine module missing (torrentp)!</b>", parse_mode=ParseMode.HTML)
         return
 
     task_id = f"task_{int(time.time() * 1000)}"
     ACTIVE_TASKS[task_id] = {"cancelled": False}
     start_time = time.time()
     
-    await status_msg.edit_text(
+    await safe_edit_text(
+        status_msg,
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"🧲 <b>{tr(lang, 'torrent_connecting')}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -3753,7 +3767,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
             free_mb = f"{free_d / (1024*1024):.1f} MB"
             reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
             err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-            await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+            await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
             return
 
         downloader = TorrentDownloader(torrent_src, save_path=DOWNLOAD_DIR)
@@ -3763,7 +3777,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
             if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 downloader.stop_download()
                 dl_task.cancel()
-                await status_msg.edit_text("🛑 <b>Torrent task cancelled!</b>", parse_mode=ParseMode.HTML)
+                await safe_edit_text(status_msg, "🛑 <b>Torrent task cancelled!</b>", parse_mode=ParseMode.HTML)
                 return
             await asyncio.sleep(2.0)
 
@@ -3777,7 +3791,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
                     downloaded_items.append(fpath)
 
         if not downloaded_items:
-            await status_msg.edit_text("❌ <b>No downloaded files found from Torrent!</b>", parse_mode=ParseMode.HTML)
+            await safe_edit_text(status_msg, "❌ <b>No downloaded files found from Torrent!</b>", parse_mode=ParseMode.HTML)
             return
 
         for fpath in downloaded_items:
@@ -3786,7 +3800,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
             await process_single_local_file_upload(fpath, fname, fsize, status_msg, user_msg, user_id, start_time, task_id)
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ <b>Torrent Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"❌ <b>Torrent Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         ACTIVE_TASKS.pop(task_id, None)
         gc.collect()
@@ -3863,7 +3877,8 @@ async def process_single_local_file_upload(
     if actual_file_size > BOT_LIMIT_BYTES:
         if is_premium_active and actual_file_size <= (3950 * 1024 * 1024):
             # Premium upload
-            await status_msg.edit_text(
+            await safe_edit_text(
+                status_msg,
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"👑 <b>Uploading full {humanbytes(actual_file_size)} via Telegram Premium Account (No Splitting)...</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -3935,11 +3950,12 @@ async def process_single_local_file_upload(
                 free_mb = f"{free_s / (1024*1024):.1f} MB"
                 reserve_mb = f"{reserve_s / (1024*1024):.1f} MB"
                 err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                 return
 
             num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
-            await status_msg.edit_text(
+            await safe_edit_text(
+                status_msg,
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file into {num_parts} parts...</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -3992,7 +4008,7 @@ async def process_single_local_file_upload(
                 db_update_pending_status(pending_id, "done")
             return
 
-    await status_msg.edit_text(f"📤 <b>{tr(lang, 'uploading')}</b>", parse_mode=ParseMode.HTML)
+    await safe_edit_text(status_msg, f"📤 <b>{tr(lang, 'uploading')}</b>", parse_mode=ParseMode.HTML)
     up_start_time = time.time()
     last_update = [0]
     
@@ -4075,13 +4091,13 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
         free_mb = f"{free_d / (1024*1024):.1f} MB"
         reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
         err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-        await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
         return
     
     try:
         with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for idx, (raw_url, cname, _) in enumerate(valid_requests, 1):
-                await status_msg.edit_text(f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
+                await safe_edit_text(status_msg, f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
                 direct_url = await unrestrict_direct_link(raw_url)
                 parsed_url = urllib.parse.urlparse(direct_url)
                 referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
@@ -4126,7 +4142,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                                 downloaded_files.append(temp_fpath)
         
         zip_size = os.path.getsize(zip_filepath)
-        await status_msg.edit_text("📤 <b>ZIP Bundle created! Uploading to Telegram...</b>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, "📤 <b>ZIP Bundle created! Uploading to Telegram...</b>", parse_mode=ParseMode.HTML)
         
         await user_msg.reply_document(
             document=zip_filepath,
@@ -4135,7 +4151,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
         )
         await status_msg.delete()
     except Exception as e:
-        await status_msg.edit_text(f"❌ <b>ZIP bundle failed:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"❌ <b>ZIP bundle failed:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         for fpath in downloaded_files:
             if os.path.exists(fpath):
@@ -4717,7 +4733,7 @@ async def resilient_send_media(client, chat_id, file_path, caption, is_video, pr
 
 async def process_download_and_upload(raw_url: str, custom_name: str, custom_caption: str, status_msg: Message, user_msg: Message, hop_count: int = 0):
     if hop_count >= 2:
-        await status_msg.edit_text("❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, "❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
         return
 
     file_path = None
@@ -4773,7 +4789,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             free_mb = f"{free_init / (1024*1024):.1f} MB"
             reserve_mb = f"{reserve_init / (1024*1024):.1f} MB"
             err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-            await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+            await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
             return
 
         # =========================================================================
@@ -4782,7 +4798,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         if is_hls_or_video_stream(direct_url) or is_hls_or_video_stream(raw_url):
             target_stream_url = direct_url if is_hls_or_video_stream(direct_url) else raw_url
             logger.info(f"🎬 HLS / Video Stream detected: {target_stream_url}")
-            await status_msg.edit_text(
+            await safe_edit_text(
+                status_msg,
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🎬 <b>OMNIPOTENT HLS & Video Stream Engine:</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -4811,7 +4828,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 is_video_type = True
                 download_success = True
             else:
-                await status_msg.edit_text(
+                await safe_edit_text(
+                    status_msg,
                     "❌ <b>Stream Extraction Failed:</b>\n"
                     "<code>Server returned 403 Forbidden or Stream Expired.</code>\n\n"
                     "💡 <i>Try sending the movie page URL directly or another player server!</i>",
@@ -4858,7 +4876,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 f"⚡ <b>Bypassing Host Speed Cap Active</b>\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
-                            await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+                            await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
                             turbo_ok = await download_multi_stream_turbo(
                                 direct_url=direct_url,
@@ -4933,7 +4951,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 f"🚀 <b>Auto-Unrestrict Web Page Active</b>\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             )
-                            await status_msg.edit_text(info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+                            await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
                             mode = "a+b" if status_tracker["downloaded"] > 0 else "wb"
                             last_chunk_time = time.time()
@@ -4947,7 +4965,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                     free_mb = f"{free_d / (1024*1024):.1f} MB"
                                     reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
                                     err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                                    await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                                    await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                                     return
 
                             with open(file_path, mode) as f:
@@ -4956,7 +4974,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                                 
                                 async for chunk in resp.aiter_content(512 * 1024):
                                     if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                                        await status_msg.edit_text("🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                        await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                         return
                                     if chunk:
                                         f.write(chunk)
@@ -4996,7 +5014,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
                 async with session.get(direct_url, headers=headers, allow_redirects=True) as response:
                     if response.status not in (200, 206):
-                        await status_msg.edit_text(f"❌ <b>URL Error: Server responded with status {response.status}</b>", parse_mode=ParseMode.HTML)
+                        await safe_edit_text(status_msg, f"❌ <b>URL Error: Server responded with status {response.status}</b>", parse_mode=ParseMode.HTML)
                         return
                     
                     content_length = response.headers.get("Content-Length")
@@ -5018,13 +5036,13 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         free_mb = f"{free_d / (1024*1024):.1f} MB"
                         reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
                         err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                        await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                        await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                         return
 
                     with open(file_path, "wb") as f:
                         async for chunk in response.content.iter_chunked(512 * 1024):
                             if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                                await status_msg.edit_text("🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                 return
 
                             if chunk:
@@ -5046,7 +5064,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
 
         if not file_path or not os.path.exists(file_path) or actual_file_size == 0:
-            await status_msg.edit_text(
+            await safe_edit_text(
+                status_msg,
                 "❌ <b>Download Failed:</b>\n"
                 "<code>The server was unable to retrieve data from this host.</code>\n\n"
                 "💡 <i>The link may be expired, IP-locked, or blocked by host firewall.</i>",
@@ -5095,7 +5114,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 if m_t:
                     page_title = re.sub(r'\s+', ' ', m_t.group(1)).strip()[:100]
                 err_detail = f"\n📄 <b>Page Title:</b> <code>{page_title}</code>" if page_title else ""
-                await status_msg.edit_text(
+                await safe_edit_text(
+                    status_msg,
                     f"❌ <b>URL is an HTML webpage, not a direct file link!</b>{err_detail}\n\n"
                     f"💡 <i>Make sure the link is a valid direct link and not expired or IP-locked.</i>",
                     parse_mode=ParseMode.HTML
@@ -5160,7 +5180,8 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         if actual_file_size > BOT_LIMIT_BYTES:
             if is_premium_active and actual_file_size <= (3950 * 1024 * 1024):
                 # رفع الملف بالكامل كملف واحد ضخم عبر حساب الـ Premium
-                await status_msg.edit_text(
+                await safe_edit_text(
+                    status_msg,
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"👑 <b>Uploading full {humanbytes(actual_file_size)} via Telegram Premium Account (No Splitting)...</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -5219,11 +5240,12 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     free_mb = f"{free_s / (1024*1024):.1f} MB"
                     reserve_mb = f"{reserve_s / (1024*1024):.1f} MB"
                     err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                    await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                    await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                     return
 
                 num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
-                await status_msg.edit_text(
+                await safe_edit_text(
+                    status_msg,
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file ({humanbytes(actual_file_size)}) into {num_parts} parts...</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -5274,7 +5296,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
                 return
 
-        await status_msg.edit_text(f"📤 <b>{tr(lang, 'uploading')}</b>", reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"📤 <b>{tr(lang, 'uploading')}</b>", reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
         up_start_time = time.time()
         last_update = [0]
         
@@ -5288,7 +5310,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
 
         if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-            await status_msg.edit_text("🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
+            await safe_edit_text(status_msg, "🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
             return
 
         CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
@@ -5346,18 +5368,18 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
 
     except aiohttp.ClientError as e:
-        await status_msg.edit_text(f"❌ <b>Network Connection Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"❌ <b>Network Connection Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     except asyncio.TimeoutError:
-        await status_msg.edit_text("❌ <b>Request Timeout.</b>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, "❌ <b>Request Timeout.</b>", parse_mode=ParseMode.HTML)
     except OSError as e:
-        await status_msg.edit_text(f"❌ <b>Disk/Storage Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"❌ <b>Disk/Storage Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     except MessageNotModified:
         pass
     except RPCError as e:
         if "MESSAGE_NOT_MODIFIED" not in str(e):
-            await status_msg.edit_text(f"❌ <b>Telegram Upload Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+            await safe_edit_text(status_msg, f"❌ <b>Telegram Upload Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     except Exception as e:
-        await status_msg.edit_text(f"❌ <b>Unexpected Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await safe_edit_text(status_msg, f"❌ <b>Unexpected Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         ACTIVE_TASKS.pop(task_id, None)
         if thumb_path and os.path.exists(thumb_path):
