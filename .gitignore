@@ -8,4 +8,7 @@ __pycache__/
 ctele_downloads/
 downloads/
 *.log
+pending_downloads/
+test_data_dedupguard/
+tests_apk/SuperTuxKart*.apk
 

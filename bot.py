@@ -24,6 +24,13 @@ import urllib.parse
 import html
 import hashlib
 import shutil
+import struct
+import datetime
+import secrets
+from zoneinfo import ZoneInfo
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import pkcs7
 from dotenv import load_dotenv
 import aiohttp
 from aiohttp import web
@@ -118,12 +125,43 @@ else:
     MAX_SINGLE_FILE_SIZE = 2000 * 1024 * 1024  # 2,000 MB (~2 GB Bot Limit)
     SPLIT_PART_SIZE = 1950 * 1024 * 1024      # 1.95 GB
 
+DATA_DIR = os.environ.get("DATA_DIR", ".")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_FILE = os.path.join(DATA_DIR, "bot_database.db")
+PENDING_DIR = os.path.join(DATA_DIR, "pending_downloads")
+os.makedirs(PENDING_DIR, exist_ok=True)
+
+DISK_MIN_FREE_GB = float(os.environ.get("DISK_MIN_FREE_GB", "2"))
+
 BASE_TMP = "/tmp" if os.path.exists("/tmp") else tempfile.gettempdir()
 DOWNLOAD_DIR = os.path.join(BASE_TMP, "ctele_downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 START_TIME = time.time()
-DASHBOARD_SECRET = os.environ.get("DASHBOARD_SECRET") or hashlib.sha256(f"{API_HASH}_{BOT_TOKEN}".encode()).hexdigest()[:16]
-DB_FILE = "bot_database.db"
+
+def get_or_create_dashboard_secret() -> str:
+    env_secret = os.environ.get("DASHBOARD_SECRET", "").strip()
+    if env_secret:
+        return env_secret
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bot_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    cursor.execute("SELECT value FROM bot_meta WHERE key = 'dashboard_secret'")
+    row = cursor.fetchone()
+    if row and row[0]:
+        secret = row[0]
+    else:
+        secret = secrets.token_hex(24)
+        cursor.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('dashboard_secret', ?)", (secret,))
+        conn.commit()
+    conn.close()
+    return secret
+
+DASHBOARD_SECRET = get_or_create_dashboard_secret()
 
 STEALTH_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
@@ -198,6 +236,28 @@ TEXTS = {
         "final_size": "📊 الحجم النهائي:",
         "total_time": "⏱️ الوقت الإجمالي:",
         "avg_speed": "🚀 متوسط السرعة:",
+        "dup_warning_title": "⚠️ <b>تنبيه: تم تنزيل هذا التطبيق مسبقاً بنفس الإصدار!</b>",
+        "dup_prev_header": "📜 <b>بيانات التنزيل السابق المسجل:</b>",
+        "dup_prev_date": "🕒 تاريخ التنزيل السابق:",
+        "dup_prev_hash": "🔑 بصمة الملف السابقة:",
+        "dup_signer_match": "✍️ التوقيع: ✅ نفس شهادة التوقيع الأصلية",
+        "dup_signer_diff": "✍️ التوقيع: ⚠️ شهادة توقيع مختلفة تماماً!",
+        "dup_prompt": "💡 <b>هل ترغب في تنزيله ورفعه إلى تليجرام مجدداً؟</b>",
+        "btn_dup_download": "✅ نزّله تاني",
+        "btn_dup_cancel": "🛑 إلغاء",
+        "dup_cancelled_notice": "🛑 <b>تم إلغاء تنزيل التطبيق المكرر وحذفه بنجاح.</b>",
+        "dup_approved_notice": "⏳ <b>جاري رفع الملف المعتمد إلى تليجرام...</b>",
+        "dup_expired_alert": "⚠️ هذه العملية منتهية الصلاحية (Expired).",
+        "dup_already_done_alert": "✅ تم رفع هذا الملف مسبقاً.",
+        "dup_already_cancelled_alert": "🛑 تم إلغاء هذه العملية مسبقاً.",
+        "dup_file_missing_alert": "❌ الملف غير موجود في مسار الانتظار.",
+        "disk_low_error": (
+            "❌ <b>مساحة القرص غير كافية لإتمام العملية!</b>\n\n"
+            "📊 <b>المطلوب:</b> <code>{needed}</code>\n"
+            "💾 <b>المتاح حالياً:</b> <code>{free}</code>\n"
+            "🛡️ <b>الحد الأدنى للاحتياطي:</b> <code>{reserve}</code>\n\n"
+            "💡 <i>يرجى تحرير بعض المساحة على الخادم والمحاولة مجدداً.</i>"
+        ),
         "help_text": (
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "📜 <b>دليل الاستخدام الناري السريع</b>\n"
@@ -272,6 +332,28 @@ TEXTS = {
         "final_size": "📊 Final Size:",
         "total_time": "⏱️ Total Duration:",
         "avg_speed": "🚀 Average Speed:",
+        "dup_warning_title": "⚠️ <b>Warning: Duplicate APK Download Detected!</b>",
+        "dup_prev_header": "📜 <b>Previous Recorded Download:</b>",
+        "dup_prev_date": "🕒 Previous Date:",
+        "dup_prev_hash": "🔑 Previous File SHA-256:",
+        "dup_signer_match": "✍️ Signer: ✅ Same original signing certificate",
+        "dup_signer_diff": "✍️ Signer: ⚠️ DIFFERENT signing certificate!",
+        "dup_prompt": "💡 <b>Do you want to download and upload it to Telegram again?</b>",
+        "btn_dup_download": "✅ Download anyway",
+        "btn_dup_cancel": "🛑 Cancel",
+        "dup_cancelled_notice": "🛑 <b>Duplicate download cancelled and temporary file removed.</b>",
+        "dup_approved_notice": "⏳ <b>Uploading approved file to Telegram...</b>",
+        "dup_expired_alert": "⚠️ This pending task has expired.",
+        "dup_already_done_alert": "✅ This file has already been uploaded.",
+        "dup_already_cancelled_alert": "🛑 This task was already cancelled.",
+        "dup_file_missing_alert": "❌ File not found in pending directory.",
+        "disk_low_error": (
+            "❌ <b>Insufficient disk space to proceed!</b>\n\n"
+            "📊 <b>Required:</b> <code>{needed}</code>\n"
+            "💾 <b>Available:</b> <code>{free}</code>\n"
+            "🛡️ <b>Minimum Reserve:</b> <code>{reserve}</code>\n\n"
+            "💡 <i>Please free up disk space on the server and try again.</i>"
+        ),
         "help_text": (
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "📜 <b>Quick User Guide</b>\n"
@@ -351,6 +433,47 @@ def init_db():
             user_id INTEGER,
             find_text TEXT,
             replace_text TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS apk_inspections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            package TEXT,
+            version_name TEXT,
+            version_code INTEGER,
+            file_sha256 TEXT,
+            cert_sha256 TEXT,
+            size INTEGER,
+            filename TEXT,
+            checked_at REAL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bot_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_downloads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            chat_id INTEGER,
+            file_path TEXT,
+            filename TEXT,
+            custom_caption TEXT,
+            package TEXT,
+            version_name TEXT,
+            version_code INTEGER,
+            size INTEGER,
+            created_at REAL,
+            status TEXT DEFAULT 'pending',
+            inspection_json TEXT,
+            flow_type TEXT DEFAULT 'direct'
         )
     """)
     
@@ -494,6 +617,193 @@ def db_get_history(user_id: int, limit: int = 10) -> list:
         rows = []
     conn.close()
     return rows
+
+def db_add_apk_inspection(user_id: int, package: str, version_name: str, version_code: int,
+                          file_sha256: str, cert_sha256: str, size: int, filename: str, checked_at: float = None) -> int:
+    if checked_at is None:
+        checked_at = time.time()
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO apk_inspections (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at))
+    row_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+def db_get_last_inspection_for_package(package: str, exclude_latest: bool = True, exclude_version_code: int | None = None) -> dict | None:
+    if not package:
+        return None
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        if exclude_version_code is not None:
+            cursor.execute("""
+                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at
+                FROM apk_inspections
+                WHERE package = ? AND version_code != ?
+                ORDER BY id DESC
+                LIMIT 1
+            """, (package, exclude_version_code))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "user_id": row[1],
+                "package": row[2],
+                "version_name": row[3],
+                "version_code": row[4],
+                "file_sha256": row[5],
+                "cert_sha256": row[6],
+                "size": row[7],
+                "filename": row[8],
+                "checked_at": row[9]
+            }
+        else:
+            limit = 2 if exclude_latest else 1
+            cursor.execute("""
+                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at
+                FROM apk_inspections
+                WHERE package = ?
+                ORDER BY id DESC
+                LIMIT ?
+            """, (package, limit))
+            rows = cursor.fetchall()
+            if not rows:
+                return None
+            if exclude_latest:
+                if len(rows) < 2:
+                    return None
+                row = rows[1]
+            else:
+                row = rows[0]
+            return {
+                "id": row[0],
+                "user_id": row[1],
+                "package": row[2],
+                "version_name": row[3],
+                "version_code": row[4],
+                "file_sha256": row[5],
+                "cert_sha256": row[6],
+                "size": row[7],
+                "filename": row[8],
+                "checked_at": row[9]
+            }
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+def db_check_apk_duplicate(package: str, version_code: int) -> dict | None:
+    if not package or version_code is None:
+        return None
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at
+            FROM apk_inspections
+            WHERE package = ? AND version_code = ?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (package, version_code))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "package": row[2],
+            "version_name": row[3],
+            "version_code": row[4],
+            "file_sha256": row[5],
+            "cert_sha256": row[6],
+            "size": row[7],
+            "filename": row[8],
+            "checked_at": row[9]
+        }
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+def db_add_pending_download(user_id: int, chat_id: int, file_path: str, filename: str,
+                            custom_caption: str, package: str, version_name: str,
+                            version_code: int, size: int, status: str = "pending",
+                            inspection_json: str = "", flow_type: str = "direct") -> int:
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO pending_downloads (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, time.time(), status, inspection_json, flow_type))
+    row_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return row_id
+
+def db_get_pending_download(pending_id: int) -> dict | None:
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type
+            FROM pending_downloads
+            WHERE id = ?
+        """, (pending_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "chat_id": row[2],
+            "file_path": row[3],
+            "filename": row[4],
+            "custom_caption": row[5],
+            "package": row[6],
+            "version_name": row[7],
+            "version_code": row[8],
+            "size": row[9],
+            "created_at": row[10],
+            "status": row[11],
+            "inspection_json": row[12],
+            "flow_type": row[13]
+        }
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+def db_update_pending_status(pending_id: int, status: str):
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE pending_downloads SET status = ? WHERE id = ?", (status, pending_id))
+    conn.commit()
+    conn.close()
+
+def cleanup_expired_pending_downloads():
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    cursor = conn.cursor()
+    cutoff = time.time() - (24 * 3600)
+    try:
+        cursor.execute("SELECT id, file_path FROM pending_downloads WHERE created_at < ? AND status = 'pending'", (cutoff,))
+        rows = cursor.fetchall()
+        for pid, fpath in rows:
+            if fpath and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception as e:
+                    logger.warning(f"Failed to delete expired pending file {fpath}: {e}")
+            cursor.execute("UPDATE pending_downloads SET status = 'expired' WHERE id = ?", (pid,))
+        conn.commit()
+    except Exception as ex:
+        logger.warning(f"Error cleaning expired pending downloads: {ex}")
+    finally:
+        conn.close()
 
 def db_get_all_user_ids() -> list:
     conn = sqlite3.connect(DB_FILE, timeout=30)
@@ -830,6 +1140,8 @@ async def handle_dashboard_stats_api(request):
     disk_total_gb = round(disk.total / (1024**3), 1)
     disk_used_gb = round((disk.total - disk.free) / (1024**3), 1)
     disk_percent = round((disk.total - disk.free) / disk.total * 100, 1)
+    reserve_bytes = int(DISK_MIN_FREE_GB * (1024 ** 3))
+    disk_low = bool(disk.free < reserve_bytes * 2)
 
     uptime_sec = int(time.time() - START_TIME)
     g_stats = db_get_global_stats()
@@ -855,6 +1167,7 @@ async def handle_dashboard_stats_api(request):
         "disk_total_gb": disk_total_gb,
         "disk_used_gb": disk_used_gb,
         "disk_percent": disk_percent,
+        "disk_low": disk_low,
         "uptime_seconds": uptime_sec,
         "uptime_formatted": time_formatter(uptime_sec),
         "active_tasks_count": len(ACTIVE_TASKS),
@@ -896,7 +1209,7 @@ bot = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workdir=".",
+    workdir=DATA_DIR,
     workers=16
 )
 
@@ -907,7 +1220,7 @@ if USER_SESSION_STRING:
         api_id=API_ID,
         api_hash=API_HASH,
         session_string=USER_SESSION_STRING,
-        workdir=".",
+        workdir=DATA_DIR,
         workers=16
     )
 
@@ -1574,6 +1887,55 @@ def parse_chat_id(chat_id_raw):
         return int(chat_id_str)
     return chat_id_str
 
+def check_disk_space(path: str, needed_bytes: int | None = None) -> tuple[bool, int, int, int]:
+    """
+    Checks if there is enough free disk space on the filesystem of `path`.
+    Returns (ok: bool, needed_bytes: int, free_bytes: int, reserve_bytes: int).
+    Rule:
+    - If needed_bytes is known (> 0): require free >= needed_bytes * 1.25 + reserve.
+    - If needed_bytes is unknown or <= 0: require free >= reserve * 2.
+    """
+    reserve_bytes = int(DISK_MIN_FREE_GB * (1024 ** 3))
+    try:
+        check_dir = path
+        while check_dir and not os.path.exists(check_dir):
+            parent = os.path.dirname(check_dir)
+            if parent == check_dir:
+                break
+            check_dir = parent
+        if not check_dir or not os.path.exists(check_dir):
+            check_dir = "."
+        usage = shutil.disk_usage(check_dir)
+        free_bytes = usage.free
+    except Exception as e:
+        logger.warning(f"disk_usage check failed for {path}: {e}")
+        free_bytes = 0
+
+    if needed_bytes is not None and needed_bytes > 0:
+        req_free = int(needed_bytes * 1.25) + reserve_bytes
+        ok = free_bytes >= req_free
+    else:
+        req_free = reserve_bytes * 2
+        ok = free_bytes >= req_free
+
+    return ok, (needed_bytes or 0), free_bytes, reserve_bytes
+
+def check_disk_space_for_split(path: str, piece_size: int) -> tuple[bool, int, int, int]:
+    """
+    Checks disk space before splitting a file.
+    Rule: require free >= piece_size + reserve.
+    """
+    reserve_bytes = int(DISK_MIN_FREE_GB * (1024 ** 3))
+    try:
+        check_dir = path if os.path.exists(path) else (os.path.dirname(path) or ".")
+        usage = shutil.disk_usage(check_dir)
+        free_bytes = usage.free
+    except Exception as e:
+        logger.warning(f"disk_usage split check failed for {path}: {e}")
+        free_bytes = 0
+    ok = free_bytes >= (piece_size + reserve_bytes)
+    return ok, piece_size, free_bytes, reserve_bytes
+
 def make_start_keyboard(lang: str = "ar", is_admin: bool = False):
     buttons = [
         [
@@ -1692,6 +2054,796 @@ async def progress_bar(current: int, total: int, status_text: str, message: Mess
         await asyncio.sleep(e.value + 1)
     except (RPCError, MessageNotModified):
         pass
+
+# ==========================================
+# 8.1. محرك فحص تطبيقات أندرويد (APK Inspection Card Engine - apkinspect)
+# ==========================================
+def compute_file_sha256(filepath: str, chunk_size: int = 8 * 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest().upper()
+
+def format_dn(name: x509.Name) -> str:
+    try:
+        parts = []
+        for attr in name:
+            oid_name = attr.oid._name
+            val = str(attr.value)
+            if oid_name == "commonName":
+                parts.append(f"CN={val}")
+            elif oid_name == "organizationName":
+                parts.append(f"O={val}")
+            elif oid_name == "organizationalUnitName":
+                parts.append(f"OU={val}")
+            elif oid_name == "countryName":
+                parts.append(f"C={val}")
+            elif oid_name == "stateOrProvinceName":
+                parts.append(f"ST={val}")
+            elif oid_name == "localityName":
+                parts.append(f"L={val}")
+            elif oid_name == "emailAddress":
+                parts.append(f"emailAddress={val}")
+            else:
+                label = oid_name or attr.oid.dotted_string
+                parts.append(f"{label}={val}")
+        if parts:
+            return ", ".join(parts)
+        return name.rfc4514_string()
+    except Exception:
+        return name.rfc4514_string()
+
+def parse_axml(raw: bytes) -> dict:
+    result = {
+        "package": None,
+        "version_name": None,
+        "version_code": None,
+        "min_sdk": None,
+        "target_sdk": None,
+        "label": None,
+    }
+    if not raw or len(raw) < 8:
+        return result
+    try:
+        magic, header_size, file_size = struct.unpack_from('<HHI', raw, 0)
+        if magic != 0x0003:  # RES_XML_TYPE
+            return result
+        
+        offset = header_size
+        strings = []
+        res_ids = []
+        
+        RES_LABEL = 0x01010001
+        RES_NAME = 0x01010003
+        RES_MIN_SDK = 0x0101020c
+        RES_VERSION_CODE = 0x0101021b
+        RES_VERSION_NAME = 0x0101021c
+        RES_TARGET_SDK = 0x01010270
+
+        while offset + 8 <= len(raw):
+            chunk_type, chunk_header_size, chunk_size = struct.unpack_from('<HHI', raw, offset)
+            if chunk_size == 0 or offset + chunk_size > len(raw):
+                break
+                
+            if chunk_type == 0x0001:  # RES_STRING_POOL_TYPE
+                if chunk_size >= 28:
+                    str_cnt, sty_cnt, flags, str_start, sty_start = struct.unpack_from('<IIIII', raw, offset + 8)
+                    is_utf8 = bool(flags & 0x0100)
+                    offsets_start = offset + 28
+                    if offsets_start + str_cnt * 4 <= offset + chunk_size:
+                        offsets = struct.unpack_from(f'<{str_cnt}I', raw, offsets_start)
+                        base_str = offset + str_start
+                        for off in offsets:
+                            cur = base_str + off
+                            if cur >= len(raw):
+                                strings.append("")
+                                continue
+                            try:
+                                if is_utf8:
+                                    b1 = raw[cur]; cur += 1
+                                    if b1 & 0x80:
+                                        cur += 1
+                                    b2 = raw[cur]; cur += 1
+                                    if b2 & 0x80:
+                                        b3 = raw[cur]; cur += 1
+                                        byte_len = ((b2 & 0x7F) << 8) | b3
+                                    else:
+                                        byte_len = b2
+                                    s = raw[cur:cur + byte_len].decode('utf-8', errors='replace')
+                                else:
+                                    u16_len = struct.unpack_from('<H', raw, cur)[0]
+                                    cur += 2
+                                    if u16_len & 0x8000:
+                                        u16_len2 = struct.unpack_from('<H', raw, cur)[0]
+                                        cur += 2
+                                        u16_len = ((u16_len & 0x7FFF) << 16) | u16_len2
+                                    byte_len = u16_len * 2
+                                    s = raw[cur:cur + byte_len].decode('utf-16le', errors='replace')
+                                strings.append(s)
+                            except Exception:
+                                strings.append("")
+
+            elif chunk_type == 0x0180:  # RES_XML_RESOURCE_MAP_TYPE
+                count = (chunk_size - chunk_header_size) // 4
+                if count > 0:
+                    res_ids = list(struct.unpack_from(f'<{count}I', raw, offset + chunk_header_size))
+
+            elif chunk_type == 0x0102:  # RES_XML_START_ELEMENT_TYPE
+                if offset + 30 <= len(raw):
+                    ns_idx, name_idx = struct.unpack_from('<II', raw, offset + 16)
+                    attr_start, attr_size, attr_count = struct.unpack_from('<HHH', raw, offset + 24)
+                    tag_name = strings[name_idx] if name_idx < len(strings) else ""
+                    
+                    attrs_base = offset + 16 + attr_start
+                    for i in range(attr_count):
+                        attr_offset = attrs_base + i * attr_size
+                        if attr_offset + 20 > len(raw):
+                            break
+                        a_ns, a_name, a_raw_val, a_type_data, a_data = struct.unpack_from('<IIIII', raw, attr_offset)
+                        data_type = (a_type_data >> 24) & 0xFF
+                        
+                        attr_name = strings[a_name] if a_name < len(strings) else ""
+                        attr_res_id = res_ids[a_name] if a_name < len(res_ids) else 0
+                        
+                        val_str = strings[a_raw_val] if (0 <= a_raw_val < len(strings)) else None
+                        if val_str is None and data_type == 0x03:
+                            if 0 <= a_data < len(strings):
+                                val_str = strings[a_data]
+
+                        if tag_name == "manifest":
+                            if attr_name == "package":
+                                result["package"] = val_str or (strings[a_data] if 0 <= a_data < len(strings) else None)
+                            elif attr_name == "versionName" or attr_res_id == RES_VERSION_NAME:
+                                result["version_name"] = val_str or (strings[a_data] if data_type == 0x03 and 0 <= a_data < len(strings) else str(a_data))
+                            elif attr_name == "versionCode" or attr_res_id == RES_VERSION_CODE:
+                                if data_type in (0x10, 0x11):
+                                    result["version_code"] = a_data
+                                elif val_str and val_str.isdigit():
+                                    result["version_code"] = int(val_str)
+                                elif a_data:
+                                    result["version_code"] = a_data
+                                    
+                        elif tag_name == "uses-sdk":
+                            if attr_name == "minSdkVersion" or attr_res_id == RES_MIN_SDK:
+                                if data_type in (0x10, 0x11):
+                                    result["min_sdk"] = a_data
+                                elif val_str:
+                                    result["min_sdk"] = int(val_str) if val_str.isdigit() else val_str
+                                else:
+                                    result["min_sdk"] = a_data
+                            elif attr_name == "targetSdkVersion" or attr_res_id == RES_TARGET_SDK:
+                                if data_type in (0x10, 0x11):
+                                    result["target_sdk"] = a_data
+                                elif val_str:
+                                    result["target_sdk"] = int(val_str) if val_str.isdigit() else val_str
+                                else:
+                                    result["target_sdk"] = a_data
+
+                        elif tag_name == "application":
+                            if attr_name == "label" or attr_res_id == RES_LABEL:
+                                if data_type == 0x03 and 0 <= a_data < len(strings):
+                                    cand = strings[a_data]
+                                    if not cand.startswith("@") and not cand.startswith("res/"):
+                                        result["label"] = cand
+                                elif val_str and not val_str.startswith("@") and not val_str.startswith("res/"):
+                                    result["label"] = val_str
+
+            offset += chunk_size
+    except Exception:
+        pass
+    return result
+
+def extract_v1_cert(z: zipfile.ZipFile):
+    for f in z.namelist():
+        upper = f.upper()
+        if upper.startswith("META-INF/") and upper.endswith((".RSA", ".DSA", ".EC")):
+            try:
+                data = z.read(f)
+                certs = pkcs7.load_der_pkcs7_certificates(data)
+                if certs:
+                    return certs[0]
+            except Exception:
+                continue
+    return None
+
+def extract_v2_v3_cert(filepath: str):
+    try:
+        with open(filepath, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            if size < 32:
+                return None
+            max_search = min(size, 65535 + 22)
+            f.seek(size - max_search)
+            buf = f.read(max_search)
+            pos = buf.rfind(b"PK\x05\x06")
+            if pos == -1:
+                return None
+            cd_offset = struct.unpack_from("<I", buf, pos + 16)[0]
+            if cd_offset < 24 or cd_offset > size:
+                return None
+            
+            f.seek(cd_offset - 24)
+            footer = f.read(24)
+            if len(footer) < 24:
+                return None
+            size_of_block, magic = struct.unpack("<Q16s", footer)
+            if magic != b"APK Sig Block 42":
+                return None
+            block_start = cd_offset - size_of_block - 8
+            if block_start < 0:
+                return None
+            f.seek(block_start)
+            header = f.read(8)
+            if struct.unpack("<Q", header)[0] != size_of_block:
+                return None
+            
+            pairs_len = size_of_block - 24
+            pairs_data = f.read(pairs_len)
+            offset = 0
+            v2_payload = None
+            v3_payload = None
+            while offset + 12 <= len(pairs_data):
+                pair_len, pair_id = struct.unpack_from("<QI", pairs_data, offset)
+                val_len = pair_len - 4
+                val_start = offset + 12
+                if val_start + val_len > len(pairs_data):
+                    break
+                if pair_id == 0x7109871a:  # v2
+                    v2_payload = pairs_data[val_start:val_start + val_len]
+                elif pair_id == 0xf05368c0:  # v3
+                    v3_payload = pairs_data[val_start:val_start + val_len]
+                offset += 8 + pair_len
+                
+            payload = v2_payload or v3_payload
+            if not payload or len(payload) < 8:
+                return None
+            
+            signers_len = struct.unpack_from("<I", payload, 0)[0]
+            pos = 4
+            if pos + signers_len > len(payload):
+                return None
+            signer_len = struct.unpack_from("<I", payload, pos)[0]
+            pos += 4
+            if pos + signer_len > len(payload):
+                return None
+            signed_data_len = struct.unpack_from("<I", payload, pos)[0]
+            pos += 4
+            if pos + signed_data_len > len(payload):
+                return None
+            digests_len = struct.unpack_from("<I", payload, pos)[0]
+            pos += 4 + digests_len
+            if pos + 4 > len(payload):
+                return None
+            certs_len = struct.unpack_from("<I", payload, pos)[0]
+            pos += 4
+            if certs_len < 4 or pos + 4 > len(payload):
+                return None
+            first_cert_len = struct.unpack_from("<I", payload, pos)[0]
+            pos += 4
+            if pos + first_cert_len > len(payload):
+                return None
+            cert_bytes = payload[pos:pos + first_cert_len]
+            return x509.load_der_x509_certificate(cert_bytes)
+    except Exception:
+        return None
+
+def inspect_apk(file_path: str) -> dict | None:
+    if not file_path or not os.path.exists(file_path):
+        return None
+    
+    file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        return None
+        
+    try:
+        is_bin, _ = is_valid_binary_file(file_path)
+        if not is_bin:
+            return None
+    except Exception:
+        pass
+        
+    if not zipfile.is_zipfile(file_path):
+        return None
+        
+    try:
+        file_sha256 = compute_file_sha256(file_path)
+    except Exception:
+        return None
+        
+    checked_at = time.time()
+    
+    is_bundle = False
+    bundle_rule_en = None
+    bundle_rule_ar = None
+    base_apk_entry_name = None
+    base_apk_size = None
+    base_apk_sha256 = None
+    target_apk_path = file_path
+    temp_extracted_apk = None
+    
+    clean_name = os.path.basename(file_path).lower()
+    if clean_name.endswith((".xapk", ".apks")):
+        is_bundle = True
+        try:
+            with zipfile.ZipFile(file_path, "r") as z_bundle:
+                apk_entries = [info for info in z_bundle.infolist() if info.filename.lower().endswith(".apk") and not info.is_dir()]
+                if not apk_entries:
+                    return {
+                        "package": None,
+                        "version_name": None,
+                        "version_code": None,
+                        "min_sdk": None,
+                        "target_sdk": None,
+                        "label": None,
+                        "cert_sha256": None,
+                        "cert_sha1": None,
+                        "subject_dn": None,
+                        "signer_source": None,
+                        "file_sha256": file_sha256,
+                        "size_bytes": file_size,
+                        "checked_at": checked_at,
+                        "is_bundle": True,
+                        "bundle_rule_en": "no APK entry found in bundle",
+                        "bundle_rule_ar": "لم يتم العثور على ملفات APK داخل الحزمة",
+                        "filename": os.path.basename(file_path)
+                    }
+                
+                chosen_entry = None
+                # Rule 1: manifest.json package match
+                if "manifest.json" in z_bundle.namelist():
+                    try:
+                        m_data = json.loads(z_bundle.read("manifest.json").decode("utf-8", errors="ignore"))
+                        pkg_name = m_data.get("package_name")
+                        if pkg_name:
+                            for e in apk_entries:
+                                e_base = os.path.basename(e.filename).lower()
+                                if e_base == f"{pkg_name.lower()}.apk":
+                                    chosen_entry = e
+                                    bundle_rule_en = "manifest package match"
+                                    bundle_rule_ar = "مطابقة اسم الحزمة"
+                                    break
+                    except Exception:
+                        pass
+                
+                # Rule 2: base.apk
+                if not chosen_entry:
+                    for e in apk_entries:
+                        e_base = os.path.basename(e.filename).lower()
+                        if e_base in ("base.apk", "base-master.apk"):
+                            chosen_entry = e
+                            bundle_rule_en = f"base APK ({e_base})"
+                            bundle_rule_ar = f"ملف الحزمة الأساسي ({e_base})"
+                            break
+                            
+                # Rule 3: largest *.apk entry
+                if not chosen_entry:
+                    chosen_entry = max(apk_entries, key=lambda e: e.file_size)
+                    e_base = os.path.basename(chosen_entry.filename)
+                    bundle_rule_en = f"largest APK entry ({e_base})"
+                    bundle_rule_ar = f"الملف الأكبر ({e_base})"
+                    
+                tmp_dir = DOWNLOAD_DIR if os.path.exists(DOWNLOAD_DIR) else (os.path.dirname(file_path) or os.getcwd())
+                temp_extracted_apk = os.path.join(tmp_dir, f"_temp_inspect_{os.getpid()}_{int(time.time()*1000)}.apk")
+                with z_bundle.open(chosen_entry) as src, open(temp_extracted_apk, "wb") as dst:
+                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+                target_apk_path = temp_extracted_apk
+                base_apk_entry_name = chosen_entry.filename
+                base_apk_size = os.path.getsize(temp_extracted_apk)
+                base_apk_sha256 = compute_file_sha256(temp_extracted_apk)
+        except Exception:
+            return None
+
+    manifest_info = {
+        "package": None,
+        "version_name": None,
+        "version_code": None,
+        "min_sdk": None,
+        "target_sdk": None,
+        "label": None,
+    }
+    cert = None
+    signer_source = None
+    
+    try:
+        try:
+            with zipfile.ZipFile(target_apk_path, "r") as z:
+                if "AndroidManifest.xml" in z.namelist():
+                    raw_axml = z.read("AndroidManifest.xml")
+                    manifest_info = parse_axml(raw_axml)
+                
+                # Try v1 signature
+                cert = extract_v1_cert(z)
+                if cert:
+                    signer_source = "v1"
+        except Exception:
+            pass
+            
+        # If no v1 cert, try APK signing block (v2/v3)
+        if not cert:
+            cert = extract_v2_v3_cert(target_apk_path)
+            if cert:
+                signer_source = "v2/v3"
+    finally:
+        if temp_extracted_apk and os.path.exists(temp_extracted_apk):
+            try:
+                os.remove(temp_extracted_apk)
+            except Exception:
+                pass
+
+    cert_sha256 = None
+    cert_sha1 = None
+    subject_dn = None
+    if cert:
+        try:
+            cert_sha256 = cert.fingerprint(hashes.SHA256()).hex().upper()
+            cert_sha1 = cert.fingerprint(hashes.SHA1()).hex().upper()
+            subject_dn = format_dn(cert.subject)
+        except Exception:
+            pass
+
+    return {
+        "package": manifest_info.get("package"),
+        "version_name": manifest_info.get("version_name"),
+        "version_code": manifest_info.get("version_code"),
+        "min_sdk": manifest_info.get("min_sdk"),
+        "target_sdk": manifest_info.get("target_sdk"),
+        "label": manifest_info.get("label"),
+        "cert_sha256": cert_sha256,
+        "cert_sha1": cert_sha1,
+        "subject_dn": subject_dn,
+        "signer_source": signer_source,
+        "file_sha256": file_sha256,
+        "size_bytes": file_size,
+        "checked_at": checked_at,
+        "is_bundle": is_bundle,
+        "bundle_rule_en": bundle_rule_en,
+        "bundle_rule_ar": bundle_rule_ar,
+        "base_apk_entry_name": base_apk_entry_name,
+        "base_apk_size": base_apk_size,
+        "base_apk_sha256": base_apk_sha256,
+        "filename": os.path.basename(file_path)
+    }
+
+def format_cairo_time(epoch_time: float) -> str:
+    try:
+        tz = ZoneInfo("Africa/Cairo")
+    except Exception:
+        tz = datetime.timezone(datetime.timedelta(hours=3))
+    dt = datetime.datetime.fromtimestamp(epoch_time, tz=tz)
+    return dt.strftime("%Y-%m-%d %H:%M Cairo")
+
+def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") -> str:
+    if not info:
+        return ""
+
+    lines = []
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("🛡️ بطاقة فحص APK | APK Inspection")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    # Bundle line
+    if info.get("is_bundle"):
+        rule = info.get("bundle_rule_ar") if lang == "ar" else info.get("bundle_rule_en")
+        if lang == "ar":
+            lines.append(f"📦 الحزمة: تم فحص APK الأساسي ({rule})")
+        else:
+            lines.append(f"📦 Bundle: base APK inspected ({rule})")
+
+    # Package
+    package = info.get("package")
+    if package:
+        if lang == "ar":
+            lines.append(f"📦 الباكدج: <code>{html.escape(package)}</code>")
+        else:
+            lines.append(f"📦 Package: <code>{html.escape(package)}</code>")
+
+    # Version
+    vname = info.get("version_name")
+    vcode = info.get("version_code")
+    if vname and vcode is not None:
+        vdisp = f"{vname} ({vcode})"
+    elif vname:
+        vdisp = str(vname)
+    elif vcode is not None:
+        vdisp = str(vcode)
+    else:
+        vdisp = None
+
+    if vdisp:
+        if lang == "ar":
+            lines.append(f"🔢 الإصدار: <code>{html.escape(vdisp)}</code>")
+        else:
+            lines.append(f"🔢 Version: <code>{html.escape(vdisp)}</code>")
+
+    # Size & File Hash:
+    is_bundle = info.get("is_bundle", False)
+    if is_bundle:
+        size = info.get("size_bytes")
+        file_sha256 = info.get("file_sha256")
+        base_size = info.get("base_apk_size")
+        base_sha256 = info.get("base_apk_sha256")
+        base_entry = info.get("base_apk_entry_name")
+
+        if size is not None:
+            if lang == "ar":
+                lines.append(f"📊 حجم الحزمة (Bundle): <code>{humanbytes(size)} ({size} B)</code>")
+            else:
+                lines.append(f"📊 Delivered Bundle Size: <code>{humanbytes(size)} ({size} B)</code>")
+        if file_sha256:
+            if lang == "ar":
+                lines.append("🔑 بصمة الحزمة SHA-256:")
+            else:
+                lines.append("🔑 Delivered Bundle SHA-256:")
+            lines.append(f"<code>{file_sha256}</code>")
+        if base_entry:
+            if lang == "ar":
+                lines.append(f"📁 ملف APK الأساسي: <code>{html.escape(base_entry)}</code>")
+            else:
+                lines.append(f"📁 Base APK Entry: <code>{html.escape(base_entry)}</code>")
+        if base_size is not None:
+            if lang == "ar":
+                lines.append(f"📊 حجم APK الأساسي: <code>{humanbytes(base_size)} ({base_size} B)</code>")
+            else:
+                lines.append(f"📊 Base APK Size: <code>{humanbytes(base_size)} ({base_size} B)</code>")
+        if base_sha256:
+            if lang == "ar":
+                lines.append("🔑 بصمة APK الأساسي SHA-256:")
+            else:
+                lines.append("🔑 Base APK SHA-256:")
+            lines.append(f"<code>{base_sha256}</code>")
+    else:
+        # Standard APK
+        size = info.get("size_bytes")
+        if size is not None:
+            if lang == "ar":
+                lines.append(f"📊 الحجم: <code>{humanbytes(size)} ({size} B)</code>")
+            else:
+                lines.append(f"📊 Size: <code>{humanbytes(size)} ({size} B)</code>")
+
+        file_sha256 = info.get("file_sha256")
+        if file_sha256:
+            if lang == "ar":
+                lines.append("🔑 بصمة الملف SHA-256:")
+            else:
+                lines.append("🔑 File SHA-256:")
+            lines.append(f"<code>{file_sha256}</code>")
+
+    # Android SDK
+    min_sdk = info.get("min_sdk")
+    target_sdk = info.get("target_sdk")
+    if min_sdk is not None and target_sdk is not None:
+        sdk_disp = f"minSdk {min_sdk} / target {target_sdk}"
+    elif min_sdk is not None:
+        sdk_disp = f"minSdk {min_sdk}"
+    elif target_sdk is not None:
+        sdk_disp = f"target {target_sdk}"
+    else:
+        sdk_disp = None
+
+    if sdk_disp:
+        if lang == "ar":
+            lines.append(f"🤖 أندرويد: <code>{html.escape(sdk_disp)}</code>")
+        else:
+            lines.append(f"🤖 Android: <code>{html.escape(sdk_disp)}</code>")
+
+    # Optional App Label
+    label = info.get("label")
+    if label:
+        esc_label = html.escape(str(label))
+        if lang == "ar":
+            lines.append(f"📱 التطبيق: <code>{esc_label}</code>")
+        else:
+            lines.append(f"📱 App: <code>{esc_label}</code>")
+
+    # Signer block
+    cert_sha256 = info.get("cert_sha256")
+    subject_dn = info.get("subject_dn")
+    if not cert_sha256 and not subject_dn:
+        if lang == "ar":
+            lines.append("✍️ الموقّع: <code>لم يتم العثور على شهادة توقيع</code>")
+        else:
+            lines.append("✍️ Signer: <code>No signing certificate found</code>")
+    else:
+        esc_dn = html.escape(str(subject_dn or "Unknown"))
+        if lang == "ar":
+            lines.append(f"✍️ الموقّع: <code>{esc_dn}</code>")
+            lines.append("🖋️ بصمة الشهادة SHA-256:")
+            lines.append(f"<code>{cert_sha256}</code>")
+        else:
+            lines.append(f"✍️ Signer: <code>{esc_dn}</code>")
+            lines.append("🖋️ Cert SHA-256:")
+            lines.append(f"<code>{cert_sha256}</code>")
+
+        # Signer consistency check (only if prev exists with a different version_code)
+        if prev and prev.get("cert_sha256"):
+            prev_v = prev.get("version_name") or prev.get("version_code") or "?"
+            if prev["cert_sha256"] == cert_sha256:
+                if lang == "ar":
+                    lines.append(f"✅ نفس الموقّع مثل الإصدار v{prev_v}")
+                else:
+                    lines.append(f"✅ Same signer as v{prev_v}")
+            else:
+                if lang == "ar":
+                    lines.append(f"⚠️ موقّع مختلف عن الإصدار v{prev_v} — تم تغيير التوقيع (لن يتم تثبيت التحديثات فوق الإصدار القديم)")
+                else:
+                    lines.append(f"⚠️ DIFFERENT signer than v{prev_v} — signature changed (updates will NOT install over the old version)")
+
+    # Time
+    checked_at = info.get("checked_at", time.time())
+    cairo_time_str = format_cairo_time(checked_at)
+    if lang == "ar":
+        lines.append(f"🕒 وقت الفحص: <code>{cairo_time_str}</code>")
+    else:
+        lines.append(f"🕒 Checked At: <code>{cairo_time_str}</code>")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+def format_duplicate_warning_card(info: dict, prev: dict, lang: str = "ar") -> str:
+    lines = []
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    if lang == "ar":
+        lines.append("⚠️ <b>تنبيه: تم تنزيل هذا التطبيق مسبقاً بنفس الإصدار!</b>")
+    else:
+        lines.append("⚠️ <b>Warning: Duplicate APK Download Detected!</b>")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+    pkg = info.get("package") or "Unknown"
+    vname = info.get("version_name") or ""
+    vcode = info.get("version_code")
+    vdisp = f"{vname} ({vcode})" if (vname and vcode is not None) else (str(vname or vcode or "Unknown"))
+    size = info.get("size_bytes") or 0
+
+    if lang == "ar":
+        lines.append(f"📦 الباكدج: <code>{html.escape(pkg)}</code>")
+        lines.append(f"🔢 الإصدار: <code>{html.escape(vdisp)}</code>")
+        lines.append(f"📊 الحجم: <code>{humanbytes(size)} ({size} B)</code>")
+        lines.append("")
+        lines.append("📜 <b>بيانات التنزيل السابق المسجل:</b>")
+        if prev.get("checked_at"):
+            lines.append(f"🕒 تاريخ التنزيل: <code>{format_cairo_time(prev['checked_at'])}</code>")
+        if prev.get("file_sha256"):
+            lines.append(f"🔑 بصمة الملف: <code>{prev['file_sha256'][:12]}...</code>")
+    else:
+        lines.append(f"📦 Package: <code>{html.escape(pkg)}</code>")
+        lines.append(f"🔢 Version: <code>{html.escape(vdisp)}</code>")
+        lines.append(f"📊 Size: <code>{humanbytes(size)} ({size} B)</code>")
+        lines.append("")
+        lines.append("📜 <b>Previous Recorded Download:</b>")
+        if prev.get("checked_at"):
+            lines.append(f"🕒 Date: <code>{format_cairo_time(prev['checked_at'])}</code>")
+        if prev.get("file_sha256"):
+            lines.append(f"🔑 File SHA-256: <code>{prev['file_sha256'][:12]}...</code>")
+
+    curr_cert = info.get("cert_sha256")
+    prev_cert = prev.get("cert_sha256")
+    if curr_cert and prev_cert:
+        if curr_cert == prev_cert:
+            lines.append("✍️ التوقيع: ✅ نفس شهادة التوقيع الأصلية" if lang == "ar" else "✍️ Signer: ✅ Same original signing certificate")
+        else:
+            lines.append("✍️ التوقيع: ⚠️ شهادة توقيع مختلفة تماماً!" if lang == "ar" else "✍️ Signer: ⚠️ DIFFERENT signing certificate!")
+
+    lines.append("")
+    if lang == "ar":
+        lines.append("💡 <b>هل ترغب في تنزيله ورفعه إلى تليجرام مجدداً؟</b>")
+    else:
+        lines.append("💡 <b>Do you want to download and upload it to Telegram again?</b>")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+def make_duplicate_keyboard(pending_id: int, lang: str = "ar") -> InlineKeyboardMarkup:
+    btn_go = "✅ نزّله تاني" if lang == "ar" else "✅ Download anyway"
+    btn_no = "🛑 إلغاء" if lang == "ar" else "🛑 Cancel"
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(btn_go, callback_data=f"dup_go_{pending_id}"),
+            InlineKeyboardButton(btn_no, callback_data=f"dup_no_{pending_id}")
+        ]
+    ])
+
+async def handle_apk_inspection_card(file_path: str, filename: str, user_id: int, user_msg: Message, lang: str = "ar", precomputed_info: dict | None = None):
+    try:
+        lower_name = (filename or "").lower()
+        if not lower_name.endswith((".apk", ".xapk", ".apks")):
+            return
+        if not file_path or not os.path.exists(file_path):
+            return
+
+        if precomputed_info:
+            info = precomputed_info
+        else:
+            loop = asyncio.get_running_loop()
+            info = await loop.run_in_executor(None, inspect_apk, file_path)
+        if not info:
+            return
+
+        package = info.get("package")
+        vcode = info.get("version_code")
+        cert_sha256 = info.get("cert_sha256")
+
+        # Get previous inspection for different version_code BEFORE recording new one
+        prev = db_get_last_inspection_for_package(package, exclude_latest=True, exclude_version_code=vcode) if package else None
+
+        # Record in DB
+        db_add_apk_inspection(
+            user_id=user_id,
+            package=package,
+            version_name=info.get("version_name"),
+            version_code=vcode,
+            file_sha256=info.get("file_sha256"),
+            cert_sha256=cert_sha256,
+            size=info.get("size_bytes"),
+            filename=filename,
+            checked_at=info.get("checked_at")
+        )
+
+        card_text = format_apk_inspection_card(info, prev, lang=lang)
+        if card_text:
+            await user_msg.reply_text(card_text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"APK inspection card failed silently: {e}", exc_info=True)
+
+async def run_approved_pending_upload(pending_id: int, original_msg: Message):
+    row = db_get_pending_download(pending_id)
+    if not row:
+        return
+    fpath = row["file_path"]
+    fname = row["filename"]
+    uid = row["user_id"]
+    custom_caption = row.get("custom_caption", "")
+    settings = db_get_user_settings(uid)
+    lang = settings["lang"]
+
+    if not fpath or not os.path.exists(fpath):
+        db_update_pending_status(pending_id, "expired")
+        await original_msg.reply_text(tr(lang, "dup_file_missing_alert"), parse_mode=ParseMode.HTML)
+        return
+
+    fsize = os.path.getsize(fpath)
+    precomputed = None
+    if row.get("inspection_json"):
+        try:
+            precomputed = json.loads(row["inspection_json"])
+        except Exception:
+            pass
+
+    status_msg = await original_msg.reply_text(
+        f"📤 <b>{tr(lang, 'uploading')}</b>",
+        parse_mode=ParseMode.HTML
+    )
+    task_id = f"task_{int(time.time() * 1000)}"
+    ACTIVE_TASKS[task_id] = {"cancelled": False}
+    start_time = time.time()
+
+    try:
+        await process_single_local_file_upload(
+            file_path=fpath,
+            filename=fname,
+            actual_file_size=fsize,
+            status_msg=status_msg,
+            user_msg=original_msg,
+            user_id=uid,
+            start_time=start_time,
+            task_id=task_id,
+            custom_caption=custom_caption,
+            skip_dup_check=True,
+            precomputed_apk_info=precomputed,
+            pending_id=pending_id
+        )
+    except Exception as e:
+        logger.error(f"Error uploading approved pending download {pending_id}: {e}", exc_info=True)
+        try:
+            await status_msg.edit_text(f"❌ <b>Upload Error:</b> <code>{html.escape(str(e))}</code>", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+            await user_msg.reply_text(card_text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"APK inspection card failed silently: {e}", exc_info=True)
 
 # ==========================================
 # 9. معالجات الرسائل والأوامر المزدوجة
@@ -2130,6 +3282,72 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.answer("⚠️ Task already completed.", show_alert=True)
             return
 
+        if data.startswith("dup_go_"):
+            pending_id_str = data.split("dup_go_", 1)[1]
+            try:
+                pending_id = int(pending_id_str)
+            except ValueError:
+                await query.answer("Invalid ID", show_alert=True)
+                return
+            row = db_get_pending_download(pending_id)
+            if not row:
+                await query.answer(tr(lang, "dup_expired_alert"), show_alert=True)
+                return
+            if row["status"] == "done":
+                await query.answer(tr(lang, "dup_already_done_alert"), show_alert=True)
+                return
+            if row["status"] == "cancelled":
+                await query.answer(tr(lang, "dup_already_cancelled_alert"), show_alert=True)
+                return
+            if row["status"] == "expired":
+                await query.answer(tr(lang, "dup_expired_alert"), show_alert=True)
+                return
+            fpath = row["file_path"]
+            if not fpath or not os.path.exists(fpath):
+                db_update_pending_status(pending_id, "expired")
+                await query.answer(tr(lang, "dup_file_missing_alert"), show_alert=True)
+                return
+
+            db_update_pending_status(pending_id, "approved")
+            await query.answer()
+            try:
+                await query.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            asyncio.create_task(run_approved_pending_upload(pending_id, query.message))
+            return
+
+        if data.startswith("dup_no_"):
+            pending_id_str = data.split("dup_no_", 1)[1]
+            try:
+                pending_id = int(pending_id_str)
+            except ValueError:
+                await query.answer("Invalid ID", show_alert=True)
+                return
+            row = db_get_pending_download(pending_id)
+            if not row:
+                await query.answer(tr(lang, "dup_expired_alert"), show_alert=True)
+                return
+            if row["status"] == "cancelled":
+                await query.answer(tr(lang, "dup_already_cancelled_alert"), show_alert=True)
+                return
+            if row["status"] == "done":
+                await query.answer(tr(lang, "dup_already_done_alert"), show_alert=True)
+                return
+            fpath = row["file_path"]
+            if fpath and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception as e:
+                    logger.warning(f"Error deleting pending file {fpath}: {e}")
+            db_update_pending_status(pending_id, "cancelled")
+            await query.answer()
+            try:
+                await query.message.edit_text(tr(lang, "dup_cancelled_notice"), parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+            return
+
         if data == "toggle_lang":
             new_lang = "en" if lang == "ar" else "ar"
             db_update_user_setting(user_id, "lang", new_lang)
@@ -2371,17 +3589,6 @@ async def handle_all_messages(client: Client, message: Message):
         return
 
     if text.startswith("/"):
-        if text.startswith("/eval"):
-            if not is_admin(user_id):
-                await message.reply_text("⛔ <b>غير مصرح لك باستخدام هذا الأمر! (Admin Only)</b>", parse_mode=ParseMode.HTML)
-                return
-            code = text.replace("/eval", "", 1).strip()
-            try:
-                res = eval(code)
-                await message.reply_text(f"💻 <b>Eval Result:</b>\n<code>{res}</code>", parse_mode=ParseMode.HTML)
-            except Exception as e:
-                await message.reply_text(f"❌ <b>Eval Error:</b>\n<code>{e}</code>", parse_mode=ParseMode.HTML)
-            return
         return
 
     # التورينت المغناطيسي (Magnet Links)
@@ -2498,6 +3705,16 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
     )
 
     try:
+        ok_disk, _, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, None)
+        if not ok_disk:
+            logger.error(f"Torrent disk check failed: free={free_d}, reserve={reserve_d}")
+            needed_mb = "غير محدد" if lang == "ar" else "Unknown"
+            free_mb = f"{free_d / (1024*1024):.1f} MB"
+            reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
+            err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+            await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+            return
+
         downloader = TorrentDownloader(torrent_src, save_path=DOWNLOAD_DIR)
         dl_task = asyncio.create_task(downloader.start_download())
         
@@ -2533,45 +3750,206 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
         ACTIVE_TASKS.pop(task_id, None)
         gc.collect()
 
-async def process_single_local_file_upload(file_path: str, filename: str, actual_file_size: int, status_msg: Message, user_msg: Message, user_id: int, start_time: float, task_id: str):
+async def process_single_local_file_upload(
+    file_path: str,
+    filename: str,
+    actual_file_size: int,
+    status_msg: Message,
+    user_msg: Message,
+    user_id: int,
+    start_time: float,
+    task_id: str,
+    custom_caption: str = "",
+    skip_dup_check: bool = False,
+    precomputed_apk_info: dict | None = None,
+    pending_id: int | None = None
+):
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
     filename = clean_and_rename_filename(filename, user_id=user_id)
-    if task_id in ACTIVE_TASKS: ACTIVE_TASKS[task_id]["filename"] = filename
+    if task_id in ACTIVE_TASKS:
+        ACTIVE_TASKS[task_id]["filename"] = filename
     icon, category_desc, is_video_type = get_god_category(filename)
     force_video = False if settings["upload_mode"] == "doc" else is_video_type
-    
-    if actual_file_size > MAX_SINGLE_FILE_SIZE:
-        num_parts = math.ceil(actual_file_size / SPLIT_PART_SIZE)
-        await status_msg.edit_text(
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"✂️ <b>OMNIPOTENT Splitter: Splitting giant torrent file into {num_parts} parts...</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            parse_mode=ParseMode.HTML
-        )
-        part_number = 1
-        ext = os.path.splitext(filename)[1]
-        with open(file_path, "rb") as src_file:
-            while True:
+
+    # Duplicate check for APK family
+    is_apk_family = (filename or "").lower().endswith((".apk", ".xapk", ".apks"))
+    if is_apk_family and not skip_dup_check:
+        if not precomputed_apk_info:
+            loop = asyncio.get_running_loop()
+            precomputed_apk_info = await loop.run_in_executor(None, inspect_apk, file_path)
+        if precomputed_apk_info:
+            pkg = precomputed_apk_info.get("package")
+            vcode = precomputed_apk_info.get("version_code")
+            if pkg and vcode is not None:
+                dup_record = db_check_apk_duplicate(pkg, vcode)
+                if dup_record:
+                    os.makedirs(PENDING_DIR, exist_ok=True)
+                    dest_pending_name = f"pending_{int(time.time()*1000)}_{os.path.basename(file_path)}"
+                    dest_pending_path = os.path.join(PENDING_DIR, dest_pending_name)
+                    shutil.move(file_path, dest_pending_path)
+                    new_pending_id = db_add_pending_download(
+                        user_id=user_id,
+                        chat_id=user_msg.chat.id,
+                        file_path=dest_pending_path,
+                        filename=filename,
+                        custom_caption=custom_caption,
+                        package=pkg,
+                        version_name=str(precomputed_apk_info.get("version_name") or ""),
+                        version_code=vcode,
+                        size=actual_file_size,
+                        status="pending",
+                        inspection_json=json.dumps(precomputed_apk_info),
+                        flow_type="torrent"
+                    )
+                    warn_text = format_duplicate_warning_card(precomputed_apk_info, dup_record, lang=lang)
+                    kb = make_duplicate_keyboard(new_pending_id, lang=lang)
+                    try:
+                        await status_msg.delete()
+                    except Exception:
+                        pass
+                    await user_msg.reply_text(warn_text, reply_markup=kb, parse_mode=ParseMode.HTML)
+                    return
+            else:
+                logger.info(f"APK inspection degraded (pkg={pkg}, vcode={vcode}), proceeding without duplicate warning")
+
+    BOT_LIMIT_BYTES = 1950 * 1024 * 1024
+    SPLIT_CHUNK_BYTES = 1900 * 1024 * 1024
+    uploader = get_uploader_client()
+    is_premium_active = (user_bot is not None) and getattr(user_bot, "is_connected", False) and (uploader == user_bot)
+    CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
+
+    if actual_file_size > BOT_LIMIT_BYTES:
+        if is_premium_active and actual_file_size <= (3950 * 1024 * 1024):
+            # Premium upload
+            await status_msg.edit_text(
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👑 <b>Uploading full {humanbytes(actual_file_size)} via Telegram Premium Account (No Splitting)...</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                parse_mode=ParseMode.HTML
+            )
+            up_start_time = time.time()
+            last_update = [0]
+            
+            async def pyrogram_progress_prem(current, total):
                 if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                     return
-                chunk_data = src_file.read(SPLIT_PART_SIZE)
-                if not chunk_data:
-                    break
-                part_filename = f"{os.path.splitext(filename)[0]}.part{part_number:03d}{ext}"
-                part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
-                with open(part_filepath, "wb") as part_file:
-                    part_file.write(chunk_data)
-                await user_msg.reply_document(
-                    document=part_filepath,
-                    caption=f"🧩 <b>Torrent Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
-                    parse_mode=ParseMode.HTML
+                await progress_bar(
+                    current, total, "👑 Premium Uploading", status_msg, up_start_time, last_update, icon="⚡", task_id=task_id, lang=lang
                 )
-                if os.path.exists(part_filepath): os.remove(part_filepath)
-                part_number += 1
-        db_add_history(user_id, filename, actual_file_size, category_desc)
-        await status_msg.delete()
-        return
+
+            caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
+            target_chat = CHANNEL_ID if CHANNEL_ID else "me"
+            is_vid = is_video_type and settings["upload_mode"] != "doc"
+            thumb_path, duration, width, height = None, 0, 0, 0
+            if is_vid and settings.get("enable_thumbs", 1):
+                thumb_path, duration, width, height = await extract_video_metadata(file_path)
+            try:
+                try:
+                    await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+                except Exception as prem_upload_err:
+                    logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
+                    await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+            finally:
+                if thumb_path and os.path.exists(thumb_path):
+                    try:
+                        os.remove(thumb_path)
+                    except Exception:
+                        pass
+
+            total_time_spent = round(time.time() - start_time)
+            avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
+            db_add_history(user_id, filename, actual_file_size, category_desc)
+            await status_msg.delete()
+
+            dest_text = f"القناة ({CHANNEL_ID})" if CHANNEL_ID else "الرسائل المحفوظة (Saved Messages)"
+            success_card = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👑 <b>تم رفع الملف كاملاً بـ Telegram Premium بنجاح!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
+                f"{icon} {tr(lang, 'category')} {category_desc}\n"
+                f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} (ملف واحد كامل)</code>\n"
+                f"📍 <b>مكان الإرسال:</b> <code>{dest_text}</code>\n"
+                f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
+                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
+            await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
+            if pending_id:
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+                db_update_pending_status(pending_id, "done")
+            return
+        else:
+            # Splitting check
+            ok_split, needed_s, free_s, reserve_s = check_disk_space_for_split(DOWNLOAD_DIR, SPLIT_CHUNK_BYTES)
+            if not ok_split:
+                logger.error(f"Disk check failed before split: needed={needed_s}, free={free_s}, reserve={reserve_s}")
+                needed_mb = f"{needed_s / (1024*1024):.1f} MB"
+                free_mb = f"{free_s / (1024*1024):.1f} MB"
+                reserve_mb = f"{reserve_s / (1024*1024):.1f} MB"
+                err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+                await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                return
+
+            num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
+            await status_msg.edit_text(
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file into {num_parts} parts...</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                parse_mode=ParseMode.HTML
+            )
+            part_number = 1
+            ext = os.path.splitext(filename)[1]
+            with open(file_path, "rb") as src_file:
+                while True:
+                    if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                        return
+                    chunk_data = src_file.read(SPLIT_CHUNK_BYTES)
+                    if not chunk_data:
+                        break
+                    part_filename = f"{os.path.splitext(filename)[0]}.part{part_number:03d}{ext}"
+                    part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
+                    with open(part_filepath, "wb") as part_file:
+                        part_file.write(chunk_data)
+                    await user_msg.reply_document(
+                        document=part_filepath,
+                        caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
+                        parse_mode=ParseMode.HTML
+                    )
+                    if os.path.exists(part_filepath):
+                        os.remove(part_filepath)
+                    part_number += 1
+            total_time_spent = round(time.time() - start_time)
+            avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
+            db_add_history(user_id, filename, actual_file_size, category_desc)
+            await status_msg.delete()
+            success_card = (
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{tr(lang, 'success_title')}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
+                f"{icon} {tr(lang, 'category')} {category_desc}\n"
+                f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} ({num_parts} Parts)</code>\n"
+                f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
+                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
+            await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
+            if pending_id:
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+                db_update_pending_status(pending_id, "done")
+            return
 
     await status_msg.edit_text(f"📤 <b>{tr(lang, 'uploading')}</b>", parse_mode=ParseMode.HTML)
     up_start_time = time.time()
@@ -2580,7 +3958,7 @@ async def process_single_local_file_upload(file_path: str, filename: str, actual
     async def pyrogram_progress(current, total):
         await progress_bar(current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang)
 
-    caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id)
+    caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
     
     thumb_path = None
     duration, width, height = 0, 0, 0
@@ -2588,30 +3966,29 @@ async def process_single_local_file_upload(file_path: str, filename: str, actual
         thumb_path, duration, width, height = await extract_video_metadata(file_path)
 
     try:
-        if force_video:
-            kwargs = {
-                "video": file_path,
-                "caption": caption,
-                "supports_streaming": True,
-                "progress": pyrogram_progress,
-                "parse_mode": ParseMode.HTML
-            }
-            if brand_markup: kwargs["reply_markup"] = brand_markup
-            if thumb_path and os.path.exists(thumb_path): kwargs["thumb"] = thumb_path
-            if duration > 0: kwargs["duration"] = duration
-            if width > 0 and height > 0:
-                kwargs["width"] = width
-                kwargs["height"] = height
-            await user_msg.reply_video(**kwargs)
-        else:
-            kwargs = {
-                "document": file_path,
-                "caption": caption,
-                "progress": pyrogram_progress,
-                "parse_mode": ParseMode.HTML
-            }
-            if brand_markup: kwargs["reply_markup"] = brand_markup
-            await user_msg.reply_document(**kwargs)
+        await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+        if CHANNEL_ID:
+            try:
+                uploader = get_uploader_client()
+                if force_video:
+                    kwargs = {
+                        "chat_id": CHANNEL_ID,
+                        "video": file_path,
+                        "caption": caption,
+                        "supports_streaming": True,
+                        "parse_mode": ParseMode.HTML,
+                        "reply_markup": brand_markup
+                    }
+                    if thumb_path and os.path.exists(thumb_path): kwargs["thumb"] = thumb_path
+                    if duration > 0: kwargs["duration"] = duration
+                    if width > 0 and height > 0:
+                        kwargs["width"] = width
+                        kwargs["height"] = height
+                    await uploader.send_video(**kwargs)
+                else:
+                    await uploader.send_document(chat_id=CHANNEL_ID, document=file_path, caption=caption, reply_markup=brand_markup, parse_mode=ParseMode.HTML)
+            except Exception as ch_err:
+                logger.warning(f"Channel upload notice: {ch_err}")
     finally:
         if thumb_path and os.path.exists(thumb_path):
             try: os.remove(thumb_path)
@@ -2634,12 +4011,31 @@ async def process_single_local_file_upload(file_path: str, filename: str, actual
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
+    await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
+    if pending_id:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        db_update_pending_status(pending_id, "done")
 
 async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg: Message):
     zip_filename = f"bundle_{int(time.time())}.zip"
     zip_filepath = os.path.join(DOWNLOAD_DIR, zip_filename)
     downloaded_files = []
     bundle_uid = user_msg.from_user.id if user_msg.from_user else 0
+    st = db_get_user_settings(bundle_uid)
+    lang = st["lang"]
+    ok_disk, _, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, None)
+    if not ok_disk:
+        logger.error(f"Zip bundle disk check failed: free={free_d}, reserve={reserve_d}")
+        needed_mb = "غير محدد" if lang == "ar" else "Unknown"
+        free_mb = f"{free_d / (1024*1024):.1f} MB"
+        reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
+        err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+        await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+        return
     
     try:
         with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -3329,6 +4725,16 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
         last_update = [0]
         download_success = False
 
+        ok_init, _, free_init, reserve_init = check_disk_space(DOWNLOAD_DIR, None)
+        if not ok_init:
+            logger.error(f"Initial disk check failed: free={free_init}, reserve={reserve_init}")
+            needed_mb = "غير محدد" if lang == "ar" else "Unknown"
+            free_mb = f"{free_init / (1024*1024):.1f} MB"
+            reserve_mb = f"{reserve_init / (1024*1024):.1f} MB"
+            err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+            await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+            return
+
         # =========================================================================
         # 1. فحص وتنزيل روابط البث ومشغلات الفيديو المضمنة (m3u8 & Web Video Streams)
         # =========================================================================
@@ -3492,6 +4898,17 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                             last_chunk_time = time.time()
                             stalled = False
 
+                            if status_tracker["downloaded"] == 0:
+                                ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
+                                if not ok_disk:
+                                    logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
+                                    needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
+                                    free_mb = f"{free_d / (1024*1024):.1f} MB"
+                                    reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
+                                    err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+                                    await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                                    return
+
                             with open(file_path, mode) as f:
                                 if status_tracker["downloaded"] > 0:
                                     f.seek(status_tracker["downloaded"])
@@ -3552,6 +4969,16 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                         ACTIVE_TASKS[task_id]["filename"] = filename
                     icon, category_desc, is_video_type = get_god_category(filename)
                     file_path = os.path.join(DOWNLOAD_DIR, filename)
+
+                    ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
+                    if not ok_disk:
+                        logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
+                        needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
+                        free_mb = f"{free_d / (1024*1024):.1f} MB"
+                        reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
+                        err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+                        await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                        return
 
                     with open(file_path, "wb") as f:
                         async for chunk in response.content.iter_chunked(512 * 1024):
@@ -3636,6 +5063,51 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
 
         actual_file_size = os.path.getsize(file_path)
 
+        # Duplicate detection for APK-family files
+        is_apk_family = (filename or "").lower().endswith((".apk", ".xapk", ".apks"))
+        precomputed_apk_info = None
+        if is_apk_family:
+            loop = asyncio.get_running_loop()
+            apk_info = await loop.run_in_executor(None, inspect_apk, file_path)
+            if apk_info:
+                precomputed_apk_info = apk_info
+                pkg = apk_info.get("package")
+                vcode = apk_info.get("version_code")
+                if pkg and vcode is not None:
+                    dup_record = db_check_apk_duplicate(pkg, vcode)
+                    if dup_record:
+                        os.makedirs(PENDING_DIR, exist_ok=True)
+                        dest_pending_name = f"pending_{int(time.time()*1000)}_{os.path.basename(file_path)}"
+                        dest_pending_path = os.path.join(PENDING_DIR, dest_pending_name)
+                        shutil.move(file_path, dest_pending_path)
+                        pending_fpath = dest_pending_path
+                        file_path = None
+
+                        pending_id = db_add_pending_download(
+                            user_id=user_id,
+                            chat_id=user_msg.chat.id,
+                            file_path=pending_fpath,
+                            filename=filename,
+                            custom_caption=custom_caption,
+                            package=pkg,
+                            version_name=str(apk_info.get("version_name") or ""),
+                            version_code=vcode,
+                            size=actual_file_size,
+                            status="pending",
+                            inspection_json=json.dumps(apk_info),
+                            flow_type="direct"
+                        )
+                        warn_text = format_duplicate_warning_card(apk_info, dup_record, lang=lang)
+                        kb = make_duplicate_keyboard(pending_id, lang=lang)
+                        try:
+                            await status_msg.delete()
+                        except Exception:
+                            pass
+                        await user_msg.reply_text(warn_text, reply_markup=kb, parse_mode=ParseMode.HTML)
+                        return
+                else:
+                    logger.info(f"APK inspection degraded (pkg={pkg}, vcode={vcode}), proceeding without duplicate block")
+
         BOT_LIMIT_BYTES = 1950 * 1024 * 1024      # 1.95 GB الحد الأقصى المطلق للبوت لتفادي خطأ 2000 MiB
         SPLIT_CHUNK_BYTES = 1900 * 1024 * 1024    # 1.90 GB
 
@@ -3695,9 +5167,20 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
+                await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
                 return
             else:
                 # إذا لم يكن البريميوم مفعلاً -> تقسيم الملف لتفادي الانهيار
+                ok_split, needed_s, free_s, reserve_s = check_disk_space_for_split(DOWNLOAD_DIR, SPLIT_CHUNK_BYTES)
+                if not ok_split:
+                    logger.error(f"Disk check failed before split: needed={needed_s}, free={free_s}, reserve={reserve_s}")
+                    needed_mb = f"{needed_s / (1024*1024):.1f} MB"
+                    free_mb = f"{free_s / (1024*1024):.1f} MB"
+                    reserve_mb = f"{reserve_s / (1024*1024):.1f} MB"
+                    err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
+                    await status_msg.edit_text(err_msg, parse_mode=ParseMode.HTML)
+                    return
+
                 num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
                 await status_msg.edit_text(
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -3747,6 +5230,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                     f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
+                await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
                 return
 
         await status_msg.edit_text(f"📤 <b>{tr(lang, 'uploading')}</b>", reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
@@ -3818,6 +5302,7 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
+        await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
 
     except aiohttp.ClientError as e:
         await status_msg.edit_text(f"❌ <b>Network Connection Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
@@ -3846,18 +5331,42 @@ async def process_download_and_upload(raw_url: str, custom_name: str, custom_cap
                 pass
         gc.collect()
 
-def cleanup_temp_dir():
+def cleanup_temp_dir(max_age_hours: float | None = 6.0):
+    """
+    Cleans orphan downloads in DOWNLOAD_DIR.
+    If max_age_hours is given, only files older than max_age_hours (default 6h) are deleted.
+    Never touches PENDING_DIR.
+    """
     try:
         if os.path.exists(DOWNLOAD_DIR):
+            now = time.time()
+            cutoff = (now - max_age_hours * 3600) if max_age_hours is not None else None
             for f in os.listdir(DOWNLOAD_DIR):
                 fp = os.path.join(DOWNLOAD_DIR, f)
                 if os.path.isfile(fp):
                     try:
-                        os.remove(fp)
+                        if cutoff is None or os.path.getmtime(fp) < cutoff:
+                            os.remove(fp)
                     except Exception:
                         pass
     except Exception as e:
         logger.warning(f"Cleanup temp notice: {e}")
+
+async def background_cleaner_worker():
+    """
+    Periodic hourly background cleaner:
+    - Cleans expired pending_downloads older than 24 hours
+    - Cleans DOWNLOAD_DIR orphan files older than 6 hours
+    """
+    while True:
+        try:
+            await asyncio.sleep(3600)
+            cleanup_expired_pending_downloads()
+            cleanup_temp_dir(max_age_hours=6.0)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Error in background_cleaner_worker: {e}")
 
 # ==========================================
 # 13. نقطة البداية وتشغيل البوت (Main Entry Point)
@@ -3867,9 +5376,11 @@ async def main():
         logger.error("❌ API_ID, API_HASH, or BOT_TOKEN missing!")
         sys.exit(1)
 
-    cleanup_temp_dir()
+    cleanup_temp_dir(max_age_hours=6.0)
+    cleanup_expired_pending_downloads()
     await start_web_server()
     asyncio.create_task(queue_worker())
+    asyncio.create_task(background_cleaner_worker())
 
     logger.info("Starting Pyrogram Client with Bilingual OMNIPOTENT OVERLORD ENGINE...")
     await bot.start()
