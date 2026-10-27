@@ -178,37 +178,27 @@ STEALTH_HEADERS = {
 TEXTS = {
     "ar": {
         "welcome": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🌌 <b>مرحباً بك يا {name} في المحرك الخارق OMNIPOTENT OVERLORD! ⚡👑</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "متاح الآن أقصى سرعة تنزيل بـ <b>الروابط المباشرة + التورينت (Magnet / .torrent)</b> ومصفوفة تسريع شبكية فائقة!\n\n"
-            "💡 <b>طريقة الاستخدام:</b>\n"
-            "• أرسل أي رابط تحميل مباشر (HTTP / HTTPS)\n"
-            "• أرسل أي رابط تورينت مغناطيسي (Magnet Link)\n"
-            "• أرسل أي ملف تورينت (file.torrent) مباشرة!\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "<b>مرحباً {name}</b>\n\n"
+            "<b>طريقة الاستخدام:</b>\n"
+            "• أرسل رابط تحميل مباشر (HTTP / HTTPS)\n"
+            "• أرسل رابط تورينت (Magnet Link)\n"
+            "• أرسل ملف تورينت (.torrent)"
         ),
         "god_panel": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🌌 <b>لوحة تحكم OMNIPOTENT OVERLORD ENGINE</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🔥 <b>خيوط التسريع القصوى:</b> <code>{threads}x Parallel Workers</code>\n"
-            "🧲 <b>دعم التورينت:</b> <code>مفعل 100% (Magnet & Torrent Files)</code>\n"
-            "🌐 <b>اللغة الحالية:</b> <code>🇸🇦 العربية</code>\n"
-            "📄 <b>إجمالي التحميلات:</b> <code>{files} ملفات</code>\n"
-            "📊 <b>إجمالي حجم البيانات:</b> <code>{bytes}</code>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "<b>لوحة التحكم</b>\n"
+            "<b>خيوط التحميل:</b> <code>{threads}x</code>\n"
+            "<b>دعم التورينت:</b> <code>مفعل (Magnet و Torrent)</code>\n"
+            "<b>اللغة:</b> <code>العربية</code>\n"
+            "📄 <b>إجمالي الملفات:</b> <code>{files}</code>\n"
+            "📊 <b>إجمالي البيانات:</b> <code>{bytes}</code>"
         ),
         "probe_info": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🔎 <b>فاحص الروابط OMNIPOTENT Probe</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "استخدم الأمر الفاحص لمعاينة تفاصيل الملف مسبقاً:\n\n"
-            "<code>/probe الرابط المباشر</code>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "🔎 <b>فحص الروابط</b>\n"
+            "لمعاينة تفاصيل الملف مسبقاً:\n\n"
+            "<code>/probe الرابط المباشر</code>"
         ),
-        "settings_title": "⚙️ <b>إعدادات التسريع واللغة وتفضيلات OMNIPOTENT ENGINE:</b>",
-        "btn_panel": "⚡ لوحة تحكم OMNIPOTENT",
+        "settings_title": "⚙️ <b>الإعدادات والتفضيلات:</b>",
+        "btn_panel": "لوحة التحكم",
         "btn_history": "📜 سجل التحميلات",
         "btn_settings": "⚙️ إعدادات التسريع واللغة",
         "btn_probe": "🔎 فحص الروابط Probe",
@@ -218,25 +208,25 @@ TEXTS = {
         "btn_lang": "🌐 اللغة: 🇸🇦 العربية",
         "btn_mode_auto": "🎬 وضع الرفع: تلقائي",
         "btn_mode_doc": "📄 وضع الرفع: مستند دائم",
-        "btn_threads": "⚡ التسريع: {threads}x Workers",
+        "btn_threads": "خيوط التحميل: {threads}x",
         "btn_caption_on": "📝 الوصف: مفعل ✅",
         "btn_caption_off": "📝 الوصف: معطل ❌",
         "btn_thumbs_on": "🖼️ المعاينة والمصغرات: مفعلة ✅",
         "btn_thumbs_off": "🖼️ المعاينة والمصغرات: معطلة ❌",
         "btn_cleantags_on": "🧹 تنظيف الإعلانات: مفعل ✅",
         "btn_cleantags_off": "🧹 تنظيف الإعلانات: معطل ❌",
-        "transfer_rate": "🚀 معدل النقل الخارق:",
+        "transfer_rate": "معدل النقل:",
         "processed_size": "📦 الحجم المعالج:",
         "eta": "⏱️ الوقت المتبقي:",
-        "downloading": "جاري التنزيل بوضع OMNIPOTENT OVERLORD...",
+        "downloading": "جاري التنزيل...",
         "uploading": "جاري الرفع المباشر إلى تليجرام...",
-        "torrent_connecting": "🧲 OMNIPOTENT Torrent: جاري جلب البيانات والاتصال بالـ Peers...",
-        "success_title": "🌌 تمت العملية بنجاح ورفع الملف بـ OMNIPOTENT ENGINE! 👑",
+        "torrent_connecting": "جاري الاتصال بالتورينت وجلب البيانات...",
+        "success_title": "✅ تمت العملية بنجاح",
         "file_name": "📄 اسم الملف:",
         "category": "التصنيف:",
         "final_size": "📊 الحجم النهائي:",
         "total_time": "⏱️ الوقت الإجمالي:",
-        "avg_speed": "🚀 متوسط السرعة:",
+        "avg_speed": "متوسط السرعة:",
         "dup_warning_title": "⚠️ <b>تنبيه: تم تنزيل هذا التطبيق مسبقاً بنفس الإصدار!</b>",
         "dup_prev_header": "📜 <b>بيانات التنزيل السابق المسجل:</b>",
         "dup_prev_date": "🕒 تاريخ التنزيل السابق:",
@@ -260,51 +250,38 @@ TEXTS = {
             "💡 <i>يرجى تحرير بعض المساحة على الخادم والمحاولة مجدداً.</i>"
         ),
         "help_text": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "📜 <b>دليل الاستخدام الناري السريع</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>دليل الاستخدام</b>\n"
             "1. <b>الروابط المباشرة:</b> أرسل رابط الملف المباشر هنا\n"
             "2. <b>روابط التورينت (Magnet):</b> أرسل رابط <code>magnet:?xt=...</code>\n"
-            "3. <b>ملفات التورينت:</b> أرسل ملف <code>.torrent</code> مباشرة هنا!\n"
-            "4. <b>حزمة ZIP مجمعة:</b> أرسل كلمة <code>[ZIP]</code> في السطر الأول ثم الروابط في الأسطر التالية لدمجها تلقائياً في ملف ZIP واحد!\n\n"
-            "📝 <b>خيارات التسمية والكابشن المخصص:</b>\n"
-            "• <code>الرابط | اسم مخصص | وصف مخصص</code>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "3. <b>ملفات التورينت:</b> أرسل ملف <code>.torrent</code> مباشرة\n"
+            "4. <b>حزمة ZIP:</b> أرسل <code>[ZIP]</code> في السطر الأول ثم الروابط لدمجها في ملف ZIP واحد\n\n"
+            "<b>تسمية ووصف مخصص:</b>\n"
+            "• <code>الرابط | اسم مخصص | وصف مخصص</code>"
         )
     },
     "en": {
         "welcome": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🌌 <b>Welcome {name} to OMNIPOTENT OVERLORD ENGINE! ⚡👑</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Maximum speed download is active for <b>Direct Links + Torrents (Magnet / .torrent)</b>!\n\n"
-            "💡 <b>How to use:</b>\n"
-            "• Send any direct HTTP/HTTPS link\n"
-            "• Send any Magnet Link (magnet:?xt=...)\n"
-            "• Send any .torrent file directly!\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "<b>Welcome {name}</b>\n\n"
+            "<b>How to use:</b>\n"
+            "• Send a direct download link (HTTP / HTTPS)\n"
+            "• Send a Magnet link (magnet:?xt=...)\n"
+            "• Send a .torrent file"
         ),
         "god_panel": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🌌 <b>OMNIPOTENT OVERLORD Control Panel</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🔥 <b>Parallel Threads:</b> <code>{threads}x Workers</code>\n"
-            "🧲 <b>Torrent Support:</b> <code>100% Active (Magnet & Torrent)</code>\n"
-            "🌐 <b>Language:</b> <code>🇺🇸 English</code>\n"
-            "📄 <b>Total Downloads:</b> <code>{files} files</code>\n"
-            "📊 <b>Total Data:</b> <code>{bytes}</code>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "<b>Control Panel</b>\n"
+            "<b>Download threads:</b> <code>{threads}x</code>\n"
+            "<b>Torrent support:</b> <code>Active (Magnet & Torrent)</code>\n"
+            "<b>Language:</b> <code>English</code>\n"
+            "📄 <b>Total files:</b> <code>{files}</code>\n"
+            "📊 <b>Total data:</b> <code>{bytes}</code>"
         ),
         "probe_info": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🔎 <b>OMNIPOTENT Link Probe</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Use the probe command to inspect file details:\n\n"
-            "<code>/probe Direct_URL</code>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "🔎 <b>Link Probe</b>\n"
+            "Inspect file details before downloading:\n\n"
+            "<code>/probe Direct_URL</code>"
         ),
-        "settings_title": "⚙️ <b>OMNIPOTENT Engine Settings & Preferences:</b>",
-        "btn_panel": "⚡ OMNIPOTENT Panel",
+        "settings_title": "⚙️ <b>Settings & Preferences:</b>",
+        "btn_panel": "Control Panel",
         "btn_history": "📜 Download History",
         "btn_settings": "⚙️ Settings & Language",
         "btn_probe": "🔎 Probe Inspector",
@@ -314,25 +291,25 @@ TEXTS = {
         "btn_lang": "🌐 Language: 🇺🇸 English",
         "btn_mode_auto": "🎬 Upload Mode: Auto Media",
         "btn_mode_doc": "📄 Upload Mode: Document",
-        "btn_threads": "⚡ Acceleration: {threads}x Workers",
+        "btn_threads": "Threads: {threads}x",
         "btn_caption_on": "📝 Caption: Enabled ✅",
         "btn_caption_off": "📝 Caption: Disabled ❌",
         "btn_thumbs_on": "🖼️ Thumbnails: Enabled ✅",
         "btn_thumbs_off": "🖼️ Thumbnails: Disabled ❌",
         "btn_cleantags_on": "🧹 Clean Ads & Tags: Enabled ✅",
         "btn_cleantags_off": "🧹 Clean Ads & Tags: Disabled ❌",
-        "transfer_rate": "🚀 Transfer Speed:",
+        "transfer_rate": "Transfer Speed:",
         "processed_size": "📦 Processed Data:",
         "eta": "⏱️ Time Remaining:",
-        "downloading": "Downloading with OMNIPOTENT ENGINE...",
+        "downloading": "Downloading...",
         "uploading": "Uploading directly to Telegram...",
-        "torrent_connecting": "🧲 OMNIPOTENT Torrent: Connecting to Peers & Fetching metadata...",
-        "success_title": "🌌 Successfully processed & uploaded with OMNIPOTENT ENGINE! 👑",
+        "torrent_connecting": "Connecting to peers and fetching metadata...",
+        "success_title": "✅ Download complete",
         "file_name": "📄 File Name:",
         "category": "Category:",
         "final_size": "📊 Final Size:",
         "total_time": "⏱️ Total Duration:",
-        "avg_speed": "🚀 Average Speed:",
+        "avg_speed": "Average Speed:",
         "dup_warning_title": "⚠️ <b>Warning: Duplicate APK Download Detected!</b>",
         "dup_prev_header": "📜 <b>Previous Recorded Download:</b>",
         "dup_prev_date": "🕒 Previous Date:",
@@ -356,16 +333,13 @@ TEXTS = {
             "💡 <i>Please free up disk space on the server and try again.</i>"
         ),
         "help_text": (
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "📜 <b>Quick User Guide</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "<b>User Guide</b>\n"
             "1. <b>Direct Links:</b> Send any direct HTTP/HTTPS URL\n"
             "2. <b>Torrent Magnets:</b> Send <code>magnet:?xt=...</code>\n"
-            "3. <b>Torrent Files:</b> Send any <code>.torrent</code> file directly!\n"
-            "4. <b>Bulk ZIP Bundle:</b> Send <code>[ZIP]</code> as the first line, then list URLs to bundle them into a single ZIP archive!\n\n"
-            "📝 <b>Custom Naming & Captions:</b>\n"
-            "• <code>URL | Custom_Name.ext | Custom_Caption</code>\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            "3. <b>Torrent Files:</b> Send any <code>.torrent</code> file directly\n"
+            "4. <b>ZIP Bundle:</b> Send <code>[ZIP]</code> as the first line, then list URLs to combine into a ZIP\n\n"
+            "<b>Custom Naming & Captions:</b>\n"
+            "• <code>URL | Custom_Name.ext | Custom_Caption</code>"
         )
     }
 }
@@ -1945,19 +1919,19 @@ def time_formatter(seconds: int) -> str:
 def get_god_category(filename: str) -> tuple:
     ext = os.path.splitext(filename)[1].lower()
     if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.3gp', '.wmv'):
-        return "🎬", "OMNIPOTENT Video", True
+        return "🎬", "Video", True
     elif ext in ('.mp3', '.m4a', '.flac', '.wav', '.aac', '.ogg', '.opus', '.wma'):
-        return "🎵", "OMNIPOTENT Audio", False
+        return "🎵", "Audio", False
     elif ext in ('.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso'):
-        return "📦", "OMNIPOTENT Archive", False
+        return "📦", "Archive", False
     elif ext in ('.apk', '.xapk', '.apks', '.exe', '.msi', '.py', '.js', '.html'):
-        return "📱", "OMNIPOTENT Software", False
+        return "📱", "Software", False
     elif ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'):
-        return "🖼️", "OMNIPOTENT Image", False
+        return "🖼️", "Image", False
     elif ext in ('.pdf', '.docx', '.doc', '.txt', '.epub'):
-        return "📄", "OMNIPOTENT Document", False
+        return "📄", "Document", False
     else:
-        return "📁", "OMNIPOTENT General", False
+        return "📁", "General", False
 
 def sanitize_filename(filename: str) -> str:
     base = os.path.basename(filename.replace("\\", "/"))
@@ -2164,7 +2138,7 @@ def make_start_keyboard(lang: str = "ar", is_admin: bool = False):
         ]
     ]
     if is_admin:
-        buttons.append([InlineKeyboardButton("👑 لوحة المسؤول (Admin Panel)", callback_data="btn_admin_panel")])
+        buttons.append([InlineKeyboardButton("لوحة المسؤول (Admin Panel)", callback_data="btn_admin_panel")])
     return InlineKeyboardMarkup(buttons)
 
 def make_settings_keyboard(user_id: int):
@@ -2183,7 +2157,7 @@ def make_settings_keyboard(user_id: int):
         [InlineKeyboardButton(threads_str, callback_data="toggle_threads")],
         [InlineKeyboardButton(caption_str, callback_data="toggle_caption"), InlineKeyboardButton(thumbs_str, callback_data="toggle_thumbs")],
         [InlineKeyboardButton(clean_str, callback_data="toggle_cleantags")],
-        [InlineKeyboardButton("👑 حقوق القناة (Auto-Branding)", callback_data="btn_open_brand")],
+        [InlineKeyboardButton("حقوق القناة (Branding)", callback_data="btn_open_brand")],
         [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
     ])
 
@@ -2213,7 +2187,7 @@ def make_cancel_keyboard(task_id: str, lang: str = "ar"):
         [InlineKeyboardButton(tr(lang, "btn_cancel"), callback_data=f"cancel_{task_id}")]
     ])
 
-async def progress_bar(current: int, total: int, status_text: str, message: Message, start_time: float, last_update: list, icon: str = "🌌", task_id: str = None, lang: str = "ar"):
+async def progress_bar(current: int, total: int, status_text: str, message: Message, start_time: float, last_update: list, icon: str = "⬇️", task_id: str = None, lang: str = "ar"):
     now = time.time()
     
     while len(last_update) < 3:
@@ -2248,15 +2222,13 @@ async def progress_bar(current: int, total: int, status_text: str, message: Mess
     perc_str = f"{round(percentage, 1)}%" if total else "N/A"
     eta_str = time_formatter(time_to_completion) if total else "..."
 
+    header = f"{icon} <b>{status_text}</b>" if icon and icon not in ("🌌", "⚡", "👑", "🚀", "🔥") else f"<b>{status_text}</b>"
     text = (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{icon} <b>{status_text}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{header}\n"
         f"<code>{bar}</code> <b>{perc_str}</b>\n\n"
-        f"{tr(lang, 'transfer_rate')} <code>{humanbytes(speed)}/s</code> 🔥🌌\n"
+        f"{tr(lang, 'transfer_rate')} <code>{humanbytes(speed)}/s</code>\n"
         f"{tr(lang, 'processed_size')} <code>{humanbytes(current)}</code> / <code>{total_str}</code>\n"
-        f"{tr(lang, 'eta')} <code>{eta_str}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"{tr(lang, 'eta')} <code>{eta_str}</code>"
     )
     
     reply_markup = make_cancel_keyboard(task_id, lang=lang) if task_id else None
@@ -2748,9 +2720,7 @@ def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") 
         return ""
 
     lines = []
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("🛡️ بطاقة فحص APK | APK Inspection")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("🛡️ فحص APK / APK Inspection")
 
     # Bundle line
     if info.get("is_bundle"):
@@ -2907,7 +2877,6 @@ def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") 
     else:
         lines.append(f"🕒 Checked At: <code>{cairo_time_str}</code>")
 
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 def format_signer_change_warning(info: dict, prev: dict | None) -> str | None:
@@ -3029,11 +2998,9 @@ def format_fwdcache_note(filename: str, total_size: int, created_at: int) -> str
     size_str = humanbytes(total_size)
     return (
         f"↪️ <b>أعدت توجيه الملف اللي نزّلته قبل كده بدل إعادة التحميل / Forwarded your earlier download instead of re-downloading</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📄 <b>الملف / File:</b> <code>{html.escape(filename or '')}</code>\n"
         f"📦 <b>الحجم / Size:</b> <code>{size_str}</code>\n"
-        f"🕒 <b>تاريخ التحميل / Downloaded at:</b> <code>{date_str}</code> (Cairo Time)\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"🕒 <b>تاريخ التحميل / Downloaded at:</b> <code>{date_str}</code> (Cairo Time)"
     )
 
 def is_message_not_found_error(exc: BaseException | None) -> bool:
@@ -3060,12 +3027,10 @@ def is_message_not_found_error(exc: BaseException | None) -> bool:
 
 def format_duplicate_warning_card(info: dict, prev: dict, lang: str = "ar") -> str:
     lines = []
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     if lang == "ar":
         lines.append("⚠️ <b>تنبيه: تم تنزيل هذا التطبيق مسبقاً بنفس الإصدار!</b>")
     else:
         lines.append("⚠️ <b>Warning: Duplicate APK Download Detected!</b>")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     pkg = info.get("package") or "Unknown"
     vname = info.get("version_name") or ""
@@ -3107,7 +3072,6 @@ def format_duplicate_warning_card(info: dict, prev: dict, lang: str = "ar") -> s
         lines.append("💡 <b>هل ترغب في تنزيله ورفعه إلى تليجرام مجدداً؟</b>")
     else:
         lines.append("💡 <b>Do you want to download and upload it to Telegram again?</b>")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
 def make_duplicate_keyboard(pending_id: int, lang: str = "ar") -> InlineKeyboardMarkup:
@@ -3336,15 +3300,12 @@ async def probe_command_handler(client: Client, message: Message):
         size_str = humanbytes(int(clen)) if clen.isdigit() else clen
         
         probe_card = (
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🌌 <b>OMNIPOTENT Probe Report:</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔎 <b>Probe Report:</b>\n"
             f"📄 <b>File:</b> <code>{fname}</code>\n"
             f"{icon} <b>Category:</b> <code>{category}</code>\n"
             f"📊 <b>Size:</b> <code>{size_str}</code>\n"
             f"🌐 <b>HTTP Code:</b> <code>{status} OK</code>\n"
-            f"🏷️ <b>Type:</b> <code>{ctype}</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            f"🏷️ <b>Type:</b> <code>{ctype}</code>"
         )
         await status_msg.edit_text(probe_card, parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -3381,14 +3342,11 @@ async def stats_command_handler(client: Client, message: Message):
     uptime_sec = int(time.time() - START_TIME)
     
     stats_text = (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 <b>Engine Stats / إحصائيات المحرك</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📊 <b>الإحصائيات / Stats:</b>\n"
         f"⏱️ <b>Uptime:</b> <code>{time_formatter(uptime_sec)}</code>\n"
         f"📄 <b>Total Files:</b> <code>{g_stats['files']}</code>\n"
         f"📊 <b>Total Bytes:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
-        f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>"
     )
     await message.reply_text(stats_text, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
@@ -3403,11 +3361,11 @@ async def history_command_handler(client: Client, message: Message):
     if not history_list:
         text = "📜 <b>No download history found / لا يوجد سجل تحميلات بعد.</b>"
     else:
-        text = "📜 <b>Latest Downloads / أحدث التحميلات:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        text = "📜 <b>Latest Downloads / أحدث التحميلات:</b>\n"
         for i, (fname, fsize, fcat, fts) in enumerate(history_list, 1):
             t_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(fts))
             text += f"{i}. 📄 <code>{fname}</code>\n   🏷️ {fcat} | 📊 {humanbytes(fsize)} | ⏱️ {t_str}\n\n"
-        text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        text = text.rstrip()
 
     await message.reply_text(text, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
@@ -3460,13 +3418,10 @@ async def broadcast_command_handler(client: Client, message: Message):
             failed_count += 1
 
     report = (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📢 <b>تقرير الإذاعة العامة:</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👥 <b>إجمالي المستخدمين:</b> <code>{total_users}</code>\n"
-        f"✅ <b>تم الإرسال بنجاح:</b> <code>{success_count}</code>\n"
-        f"❌ <b>فشل الإرسال:</b> <code>{failed_count}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"📢 <b>نتيجة الإذاعة:</b>\n"
+        f"👥 <b>المستخدمون:</b> <code>{total_users}</code>\n"
+        f"✅ <b>تم الإرسال:</b> <code>{success_count}</code>\n"
+        f"❌ <b>فشل:</b> <code>{failed_count}</code>"
     )
     await status_msg.edit_text(report, parse_mode=ParseMode.HTML)
 
@@ -3549,13 +3504,11 @@ async def list_replacements_handler(client: Client, message: Message):
     suffix = st.get("custom_suffix", "") or "لا يوجد"
     
     text = (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🛠️ <b>إعدادات تعديل الأسماء وتطهير الوسوم:</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🧹 <b>تنظيف الوسوم الإعلانية:</b> <code>{clean_state}</code>\n"
-        f"🏷️ <b>البادئة الحالية:</b> <code>{prefix}</code>\n"
-        f"🏷️ <b>اللاحقة الحالية:</b> <code>{suffix}</code>\n\n"
-        f"📋 <b>قواعد الاستبدال المخصصة ({len(rules)}):</b>\n"
+        f"🛠️ <b>إعدادات تسمية الملفات:</b>\n"
+        f"🧹 <b>تنظيف الوسوم:</b> <code>{clean_state}</code>\n"
+        f"🏷️ <b>البادئة:</b> <code>{prefix}</code>\n"
+        f"🏷️ <b>اللاحقة:</b> <code>{suffix}</code>\n\n"
+        f"📋 <b>قواعد الاستبدال ({len(rules)}):</b>\n"
     )
     if not rules:
         text += "<i>لا توجد قواعد استبدال مخصصة بعد.</i>\n"
@@ -3564,8 +3517,7 @@ async def list_replacements_handler(client: Client, message: Message):
             repl_disp = f"'{r_txt}'" if r_txt else "[حذف]"
             text += f"{i}. <code>{f_txt}</code> ➔ <code>{repl_disp}</code>\n"
     text += (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💡 <i>لحذف جميع القواعد: <code>/clear_replacements</code></i>"
+        f"\n💡 <i>لحذف جميع القواعد: <code>/clear_replacements</code></i>"
     )
     await message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -3589,15 +3541,12 @@ async def brand_command_handler(client: Client, message: Message):
             new_brand = f"@{new_brand}"
         db_update_user_setting(user_id, "channel_tag", new_brand)
         await message.reply_text(
-            f"👑 <b>تم تفعيل حقوق القناة التلقائية بنجاح! (Auto-Branding)</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📢 <b>القناة المعتمدة:</b> <code>{new_brand}</code>\n"
-            f"🏷️ <b>الموضع في الاسم:</b> <code>في النهاية (Suffix)</code>\n"
-            f"🔘 <b>الزر التفاعلي بالقناة:</b> <code>مفعل ✅</code>\n"
-            f"📝 <b>الحقوق في الكابشن:</b> <code>مفعلة ✅</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💡 <i>أي لعبة أو ملف تحمله الآن سيحمل حقوق قناتك تلقائياً!</i>\n"
-            f"لإدارة خيارات العرض أرسل أمر <code>/brand</code> في أي وقت.",
+            f"<b>تم تفعيل حقوق القناة:</b>\n"
+            f"📢 <b>القناة:</b> <code>{new_brand}</code>\n"
+            f"🏷️ <b>الموضع:</b> <code>في النهاية (Suffix)</code>\n"
+            f"🔘 <b>الزر التفاعلي:</b> <code>مفعل ✅</code>\n"
+            f"📝 <b>الكابشن:</b> <code>مفعل ✅</code>\n\n"
+            f"💡 لإدارة الخيارات: <code>/brand</code>",
             reply_markup=make_brand_keyboard(user_id),
             parse_mode=ParseMode.HTML
         )
@@ -3606,14 +3555,10 @@ async def brand_command_handler(client: Client, message: Message):
     st = db_get_user_settings(user_id)
     cur_brand = st.get("channel_tag") or "غير محدد ❌"
     await message.reply_text(
-        f"👑 <b>لوحة إدارة حقوق القناة التلقائية (Auto-Branding):</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>إدارة حقوق القناة:</b>\n"
         f"📢 <b>القناة الحالية:</b> <code>{cur_brand}</code>\n\n"
-        f"💡 <b>طريقة الاستخدام السريع:</b>\n"
-        f"• لتعيين القناة: <code>/brand @اسم_قناتك</code>\n"
-        f"• لحذف الحقوق: <code>/clear_brand</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"تحكم في كيفية ظهور حقوق قناتك عبر الأزرار أدناه:",
+        f"💡 <b>التعيين:</b> <code>/brand @اسم_قناتك</code>\n"
+        f"💡 <b>الحذف:</b> <code>/clear_brand</code>",
         reply_markup=make_brand_keyboard(user_id),
         parse_mode=ParseMode.HTML
     )
@@ -3705,9 +3650,7 @@ async def run_fresh_download(delivery_id: int, user_msg: Message, status_msg: Me
         return False
     if not status_msg:
         status_msg = await user_msg.reply_text(
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ <b>Extracting & processing OMNIPOTENT URL...</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "⏳ <b>جاري معالجة الرابط... / Processing link...</b>",
             parse_mode=ParseMode.HTML
         )
     uid = forced_user_id or delivery.get("user_id")
@@ -3824,9 +3767,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
             except Exception:
                 pass
             status_msg = await query.message.reply_text(
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ <b>Extracting & processing OMNIPOTENT URL...</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                "⏳ <b>جاري معالجة الرابط... / Processing link...</b>",
                 parse_mode=ParseMode.HTML
             )
             asyncio.create_task(run_fresh_download(delivery_id, query.message, status_msg=status_msg, forced_user_id=delivery["user_id"]))
@@ -3880,13 +3821,10 @@ async def callback_handler(client: Client, query: CallbackQuery):
             st = db_get_user_settings(user_id)
             cur_brand = st.get("channel_tag") or "غير محدد ❌"
             await query.message.edit_text(
-                f"👑 <b>لوحة إدارة حقوق القناة التلقائية (Auto-Branding):</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>إدارة حقوق القناة:</b>\n"
                 f"📢 <b>القناة الحالية:</b> <code>{cur_brand}</code>\n\n"
-                f"💡 <b>طريقة التعيين:</b>\n"
-                f"أرسل أمر: <code>/brand @اسم_قناتك</code>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"تحكم في كيفية ظهور حقوق قناتك عبر الأزرار أدناه:",
+                f"💡 <b>التعيين:</b> <code>/brand @اسم_قناتك</code>\n"
+                f"💡 <b>الحذف:</b> <code>/clear_brand</code>",
                 reply_markup=make_brand_keyboard(user_id),
                 parse_mode=ParseMode.HTML
             )
@@ -3939,17 +3877,13 @@ async def callback_handler(client: Client, query: CallbackQuery):
             queue_size = request_queue.qsize()
             uptime_sec = int(time.time() - START_TIME)
             admin_card = (
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👑 <b>لوحة تحكم المسؤول (Admin Panel)</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👥 <b>إجمالي المستخدمين المسجلين:</b> <code>{g_stats['users']} مستخدم</code>\n"
-                f"📄 <b>إجمالي الملفات المعالجة:</b> <code>{g_stats['files']}</code>\n"
-                f"📊 <b>إجمالي حجم البيانات:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
-                f"⏳ <b>حجم طابور المعالجة الحالي:</b> <code>{queue_size}</code>\n"
-                f"⏱️ <b>مدة تشغيل السيرفر (Uptime):</b> <code>{time_formatter(uptime_sec)}</code>\n\n"
-                f"📢 <b>للإذاعة العامة لجميع المستخدمين:</b>\n"
-                f"<code>/broadcast نص الرسالة هنا</code>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                f"<b>لوحة المسؤول (Admin)</b>\n"
+                f"👥 <b>المستخدمون:</b> <code>{g_stats['users']}</code>\n"
+                f"📄 <b>إجمالي الملفات:</b> <code>{g_stats['files']}</code>\n"
+                f"📊 <b>إجمالي البيانات:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
+                f"⏳ <b>طابور الانتظار:</b> <code>{queue_size}</code>\n"
+                f"⏱️ <b>مدة التشغيل:</b> <code>{time_formatter(uptime_sec)}</code>\n\n"
+                f"📢 <b>للإذاعة:</b> <code>/broadcast النص</code>"
             )
             admin_kbd = InlineKeyboardMarkup([
                 [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
@@ -3979,11 +3913,11 @@ async def callback_handler(client: Client, query: CallbackQuery):
             if not history_list:
                 text = "📜 <b>No download history found / لا يوجد سجل تحميلات بعد.</b>"
             else:
-                text = "📜 <b>Latest Downloads / أحدث التحميلات:</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                text = "📜 <b>Latest Downloads / أحدث التحميلات:</b>\n"
                 for i, (fname, fsize, fcat, fts) in enumerate(history_list, 1):
                     t_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(fts))
                     text += f"{i}. 📄 <code>{fname}</code>\n   🏷️ {fcat} | 📊 {humanbytes(fsize)} | ⏱️ {t_str}\n\n"
-                text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                text = text.rstrip()
             await query.message.edit_text(text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
         elif data == "btn_stats":
@@ -3991,14 +3925,11 @@ async def callback_handler(client: Client, query: CallbackQuery):
             queue_size = request_queue.qsize()
             uptime_sec = int(time.time() - START_TIME)
             stats_text = (
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>Engine Stats / إحصائيات المحرك</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>الإحصائيات / Stats:</b>\n"
                 f"⏱️ <b>Uptime:</b> <code>{time_formatter(uptime_sec)}</code>\n"
                 f"📄 <b>Total Files:</b> <code>{g_stats['files']}</code>\n"
                 f"📊 <b>Total Bytes:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
-                f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>"
             )
             await query.message.edit_text(stats_text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
@@ -4055,7 +3986,7 @@ async def handle_all_messages(client: Client, message: Message):
         magnet_match = re.search(r'magnet:\?[^\s]+', text)
         if magnet_match:
             magnet_url = magnet_match.group(0)
-            status_msg = await message.reply_text("🧲 <b>OMNIPOTENT Magnet Link received! Connecting to Peers...</b>", parse_mode=ParseMode.HTML)
+            status_msg = await message.reply_text("🧲 <b>جاري الاتصال بالتورينت... / Connecting to peers...</b>", parse_mode=ParseMode.HTML)
             await request_queue.put(("torrent", magnet_url, status_msg, message))
             return
 
@@ -4088,7 +4019,7 @@ async def handle_all_messages(client: Client, message: Message):
 
     if len(valid_requests) > 1:
         await message.reply_text(
-            f"📥 <b>Received {len(valid_requests)} URLs! Added to queue... 🚀</b>",
+            f"📥 <b>تمت إضافة {len(valid_requests)} رابط إلى قائمة الانتظار / Added {len(valid_requests)} URLs to queue</b>",
             parse_mode=ParseMode.HTML
         )
 
@@ -4098,19 +4029,13 @@ async def handle_all_messages(client: Client, message: Message):
         
         if queue_pos > 1:
             status_msg = await message.reply_text(
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⏳ <b>OMNIPOTENT Queue Position #{queue_pos-1}</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📄 <b>URL:</b> <code>{url[:45]}...</code>\n\n"
-                f"<i>Processing will start automatically...</i>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"⏳ <b>في قائمة الانتظار #{queue_pos-1} / Queue position #{queue_pos-1}</b>\n"
+                f"📄 <code>{url[:45]}...</code>",
                 parse_mode=ParseMode.HTML
             )
         else:
             status_msg = await message.reply_text(
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ <b>Extracting & processing OMNIPOTENT URL...</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                "⏳ <b>جاري معالجة الرابط... / Processing link...</b>",
                 parse_mode=ParseMode.HTML
             )
 
@@ -4157,9 +4082,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
     
     await safe_edit_text(
         status_msg,
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🧲 <b>{tr(lang, 'torrent_connecting')}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"🧲 <b>{tr(lang, 'torrent_connecting')}</b>",
         reply_markup=make_cancel_keyboard(task_id, lang=lang),
         parse_mode=ParseMode.HTML
     )
@@ -4289,9 +4212,7 @@ async def process_single_local_file_upload(
             # Premium upload
             await safe_edit_text(
                 status_msg,
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👑 <b>Uploading full {humanbytes(actual_file_size)} via Telegram Premium Account (No Splitting)...</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"📤 <b>{'جاري الرفع عبر Telegram Premium...' if lang == 'ar' else f'Uploading {humanbytes(actual_file_size)} via Telegram Premium...'}</b>",
                 parse_mode=ParseMode.HTML
             )
             up_start_time = time.time()
@@ -4301,7 +4222,7 @@ async def process_single_local_file_upload(
                 if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                     return
                 await progress_bar(
-                    current, total, "👑 Premium Uploading", status_msg, up_start_time, last_update, icon="⚡", task_id=task_id, lang=lang
+                    current, total, ("رفع Premium" if lang == "ar" else "Premium upload"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
                 )
 
             caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
@@ -4335,17 +4256,16 @@ async def process_single_local_file_upload(
             await status_msg.delete()
 
             dest_text = f"القناة ({CHANNEL_ID})" if CHANNEL_ID else "الرسائل المحفوظة (Saved Messages)"
+            prem_title = "<b>تم الرفع عبر Telegram Premium</b>" if lang == "ar" else "<b>Uploaded via Telegram Premium</b>"
+            dest_lbl = "مكان الإرسال:" if lang == "ar" else "Destination:"
             success_card = (
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👑 <b>تم رفع الملف كاملاً بـ Telegram Premium بنجاح!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{prem_title}\n"
                 f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
                 f"{icon} {tr(lang, 'category')} {category_desc}\n"
-                f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} (ملف واحد كامل)</code>\n"
-                f"📍 <b>مكان الإرسال:</b> <code>{dest_text}</code>\n"
+                f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
+                f"📍 <b>{dest_lbl}</b> <code>{dest_text}</code>\n"
                 f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
             )
             await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
             await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
@@ -4372,9 +4292,7 @@ async def process_single_local_file_upload(
             num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
             await safe_edit_text(
                 status_msg,
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file into {num_parts} parts...</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"✂️ <b>{'تقسيم الملف إلى ' + str(num_parts) + ' أجزاء...' if lang == 'ar' else f'Splitting file into {num_parts} parts...'}</b>",
                 parse_mode=ParseMode.HTML
             )
             part_number = 1
@@ -4412,16 +4330,13 @@ async def process_single_local_file_upload(
             task_ssl_unverified = ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
             extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
             success_card = (
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"{tr(lang, 'success_title')}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
                 f"{icon} {tr(lang, 'category')} {category_desc}\n"
                 f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} ({num_parts} Parts)</code>\n"
                 f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
-                f"{extra_ssl_line}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
+                f"{extra_ssl_line}"
             )
             await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
             await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
@@ -4490,16 +4405,13 @@ async def process_single_local_file_upload(
     extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
     
     success_card = (
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{tr(lang, 'success_title')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
         f"{icon} {tr(lang, 'category')} {category_desc}\n"
         f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
         f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-        f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
-        f"{extra_ssl_line}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
+        f"{extra_ssl_line}"
     )
     await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
     await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
@@ -4580,7 +4492,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
         
         await user_msg.reply_document(
             document=zip_filepath,
-            caption=f"📦 <b>OMNIPOTENT ZIP Bundle ({len(downloaded_files)} files)</b>\n📊 <b>Size:</b> <code>{humanbytes(zip_size)}</code>",
+            caption=f"📦 <b>ZIP Bundle ({len(downloaded_files)} files)</b>\n📊 <b>Size:</b> <code>{humanbytes(zip_size)}</code>",
             parse_mode=ParseMode.HTML
         )
         await status_msg.delete()
@@ -4700,11 +4612,11 @@ async def download_multi_stream_turbo(
                         await progress_bar(
                             status_tracker["downloaded"],
                             total_size,
-                            f"🚀 Turbo ({concurrency}x)",
+                            (f"تنزيل ({concurrency}x)" if lang == "ar" else f"Downloading ({concurrency}x)"),
                             status_msg,
                             dl_start_time,
                             last_update,
-                            icon="⚡",
+                            icon="⬇️",
                             task_id=task_id,
                             lang=lang
                         )
@@ -4903,13 +4815,9 @@ async def download_video_or_m3u8(
                 logger.info(f"⚡ Launching Multi-Stream Turbo ({num_connections}x) for OK.ru ({humanbytes(total_file_size)})...")
                 try:
                     await status_msg.edit_text(
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🚀 <b>Turbo Video Stream Engine ({num_connections}x):</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🎬 <b>Title:</b> <code>{v_title}</code>\n"
-                        f"📊 <b>Size:</b> <code>{humanbytes(total_file_size)}</code>\n"
-                        f"⚡ <b>Full Bandwidth Acceleration Active</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        f"🎬 <b>{'تنزيل فيديو' if lang == 'ar' else 'Video stream'} ({num_connections}x)</b>\n"
+                        f"📄 <b>{'العنوان' if lang == 'ar' else 'Title'}:</b> <code>{v_title}</code>\n"
+                        f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{humanbytes(total_file_size)}</code>",
                         reply_markup=make_cancel_keyboard(task_id, lang=lang),
                         parse_mode=ParseMode.HTML
                     )
@@ -5107,8 +5015,7 @@ def build_file_caption(filename: str, file_size: int, category_desc: str, icon: 
         ]
         if channel_tag:
             formatted_channel = f"@{channel_tag.lstrip('@')}" if not channel_tag.startswith("http") else channel_tag
-            caption_lines.append(f"👑 <b>Channel:</b> {formatted_channel}")
-            caption_lines.append("⚡ <i>Direct Fast Download | تحميل فائق السرعة</i>")
+            caption_lines.append(f"📢 <b>Channel:</b> {formatted_channel}")
         
         caption = "\n".join(caption_lines)
     
@@ -5304,11 +5211,7 @@ async def process_download_and_upload(
             logger.info(f"🎬 HLS / Video Stream detected: {target_stream_url}")
             await safe_edit_text(
                 status_msg,
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎬 <b>OMNIPOTENT HLS & Video Stream Engine:</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ <b>Extracting Stream & Converting to MP4 1080p...</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"🎬 <b>{'جاري معالجة البث وتحويله إلى MP4...' if lang == 'ar' else 'Processing video stream to MP4...'}</b>",
                 parse_mode=ParseMode.HTML
             )
             v_ok, v_path, v_name = await download_video_or_m3u8(
@@ -5371,14 +5274,10 @@ async def process_download_and_upload(
 
                             logger.info(f"⚡ Launching Multi-Stream Turbo Downloader ({user_threads}x) for throttled link: {direct_url} (Size: {humanbytes(total_size_probe)})...")
                             info_card = (
-                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"🚀 <b>Multi-Stream Turbo Downloader ({user_threads}x):</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"📄 <b>File:</b> <code>{filename}</code>\n"
-                                f"{icon} <b>Category:</b> {category_desc}\n"
-                                f"📊 <b>Size:</b> <code>{humanbytes(total_size_probe)}</code>\n"
-                                f"⚡ <b>Bypassing Host Speed Cap Active</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                f"⬇️ <b>{'تنزيل' if lang == 'ar' else 'Downloading'} ({user_threads}x)</b>\n"
+                                f"📄 <b>{'الملف' if lang == 'ar' else 'File'}:</b> <code>{filename}</code>\n"
+                                f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
+                                f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{humanbytes(total_size_probe)}</code>"
                             )
                             await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
@@ -5428,14 +5327,10 @@ async def process_download_and_upload(
                                     file_path = os.path.join(DOWNLOAD_DIR, filename)
 
                                     info_card = (
-                                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"🚀 <b>Multi-Stream Turbo Downloader ({user_threads}x):</b>\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"📄 <b>File:</b> <code>{filename}</code>\n"
-                                        f"{icon} <b>Category:</b> {category_desc}\n"
-                                        f"📊 <b>Size:</b> <code>{humanbytes(total_size_probe)}</code>\n"
-                                        f"⚡ <b>Bypassing Host Speed Cap Active</b>\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                        f"⬇️ <b>{'تنزيل' if lang == 'ar' else 'Downloading'} ({user_threads}x)</b>\n"
+                                        f"📄 <b>{'الملف' if lang == 'ar' else 'File'}:</b> <code>{filename}</code>\n"
+                                        f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
+                                        f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{humanbytes(total_size_probe)}</code>"
                                     )
                                     await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
@@ -5505,14 +5400,10 @@ async def process_download_and_upload(
 
                             size_disp = humanbytes(total_size) if total_size else "..."
                             info_card = (
-                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"⚡ <b>OMNIPOTENT Downloader Prepared:</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"📄 <b>File:</b> <code>{filename}</code>\n"
-                                f"{icon} <b>Category:</b> {category_desc}\n"
-                                f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                                f"🚀 <b>Auto-Unrestrict Web Page Active</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                f"⬇️ <b>{'بدء التنزيل' if lang == 'ar' else 'Starting download'}</b>\n"
+                                f"📄 <b>{'الملف' if lang == 'ar' else 'File'}:</b> <code>{filename}</code>\n"
+                                f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
+                                f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{size_disp}</code>"
                             )
                             await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
@@ -5551,7 +5442,7 @@ async def process_download_and_upload(
                                             status_msg,
                                             dl_start_time,
                                             last_update,
-                                            icon="⚡",
+                                            icon="⬇️",
                                             task_id=task_id,
                                             lang=lang
                                         )
@@ -5601,14 +5492,10 @@ async def process_download_and_upload(
 
                                         size_disp = humanbytes(total_size) if total_size else "..."
                                         info_card = (
-                                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                            f"⚡ <b>OMNIPOTENT Downloader Prepared:</b>\n"
-                                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                                            f"📄 <b>File:</b> <code>{filename}</code>\n"
-                                            f"{icon} <b>Category:</b> {category_desc}\n"
-                                            f"📊 <b>Size:</b> <code>{size_disp}</code>\n"
-                                            f"🚀 <b>Auto-Unrestrict Web Page Active</b>\n"
-                                            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                            f"⬇️ <b>{'بدء التنزيل' if lang == 'ar' else 'Starting download'}</b>\n"
+                                            f"📄 <b>{'الملف' if lang == 'ar' else 'File'}:</b> <code>{filename}</code>\n"
+                                            f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
+                                            f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{size_disp}</code>"
                                         )
                                         await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
@@ -5647,7 +5534,7 @@ async def process_download_and_upload(
                                                         status_msg,
                                                         dl_start_time,
                                                         last_update,
-                                                        icon="⚡",
+                                                        icon="⬇️",
                                                         task_id=task_id,
                                                         lang=lang
                                                     )
@@ -5721,7 +5608,7 @@ async def process_download_and_upload(
                                         status_msg,
                                         dl_start_time,
                                         last_update,
-                                        icon="⚡",
+                                        icon="⬇️",
                                         task_id=task_id,
                                         lang=lang
                                     )
@@ -5875,9 +5762,7 @@ async def process_download_and_upload(
                 # رفع الملف بالكامل كملف واحد ضخم عبر حساب الـ Premium
                 await safe_edit_text(
                     status_msg,
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👑 <b>Uploading full {humanbytes(actual_file_size)} via Telegram Premium Account (No Splitting)...</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    f"📤 <b>{'جاري الرفع عبر Telegram Premium...' if lang == 'ar' else f'Uploading {humanbytes(actual_file_size)} via Telegram Premium...'}</b>",
                     parse_mode=ParseMode.HTML
                 )
                 up_start_time = time.time()
@@ -5887,7 +5772,7 @@ async def process_download_and_upload(
                     if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                         return
                     await progress_bar(
-                        current, total, "👑 Premium Uploading", status_msg, up_start_time, last_update, icon="⚡", task_id=task_id, lang=lang
+                        current, total, ("رفع Premium" if lang == "ar" else "Premium upload"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
                     )
 
                 caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
@@ -5916,18 +5801,17 @@ async def process_download_and_upload(
 
                 dest_text = f"القناة ({CHANNEL_ID})" if CHANNEL_ID else "الرسائل المحفوظة (Saved Messages)"
                 extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""
+                prem_title = "<b>تم الرفع عبر Telegram Premium</b>" if lang == "ar" else "<b>Uploaded via Telegram Premium</b>"
+                dest_lbl = "مكان الإرسال:" if lang == "ar" else "Destination:"
                 success_card = (
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👑 <b>تم رفع الملف كاملاً بـ Telegram Premium بنجاح!</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{prem_title}\n"
                     f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
                     f"{icon} {tr(lang, 'category')} {category_desc}\n"
-                    f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} (ملف واحد كامل)</code>\n"
-                    f"📍 <b>مكان الإرسال:</b> <code>{dest_text}</code>\n"
+                    f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
+                    f"📍 <b>{dest_lbl}</b> <code>{dest_text}</code>\n"
                     f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
-                    f"{extra_ssl_line}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
+                    f"{extra_ssl_line}"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
                 await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
@@ -5947,9 +5831,7 @@ async def process_download_and_upload(
                 num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
                 await safe_edit_text(
                     status_msg,
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"✂️ <b>OMNIPOTENT Splitter: Splitting giant file ({humanbytes(actual_file_size)}) into {num_parts} parts...</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    f"✂️ <b>{'تقسيم الملف إلى ' + str(num_parts) + ' أجزاء...' if lang == 'ar' else f'Splitting file into {num_parts} parts...'}</b>",
                     parse_mode=ParseMode.HTML
                 )
 
@@ -5991,16 +5873,13 @@ async def process_download_and_upload(
 
                 extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""
                 success_card = (
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{tr(lang, 'success_title')}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
                     f"{icon} {tr(lang, 'category')} {category_desc}\n"
                     f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} ({num_parts} Parts)</code>\n"
                     f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
-                    f"{extra_ssl_line}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
+                    f"{extra_ssl_line}"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
                 await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
@@ -6069,16 +5948,13 @@ async def process_download_and_upload(
         
         extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if ssl_unverified_used else ""
         success_card = (
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"{tr(lang, 'success_title')}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
             f"{icon} {tr(lang, 'category')} {category_desc}\n"
             f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
             f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-            f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code> 🔥🌌"
-            f"{extra_ssl_line}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
+            f"{extra_ssl_line}"
         )
         await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
         await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
@@ -6184,8 +6060,8 @@ async def main():
 
     try:
         await bot.set_bot_commands([
-            BotCommand("start", "🚀 Main Menu / القائمة الرئيسية"),
-            BotCommand("omnipotent", "⚡ OMNIPOTENT Control Panel"),
+            BotCommand("start", "Main Menu / القائمة الرئيسية"),
+            BotCommand("omnipotent", "Control Panel / لوحة التحكم"),
             BotCommand("probe", "🔎 Inspect Direct URL / فحص الرابط"),
             BotCommand("settings", "⚙️ Language & Settings / الإعدادات واللغة"),
             BotCommand("help", "📜 Usage Guide / دليل الاستخدام"),
