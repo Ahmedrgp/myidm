@@ -15,7 +15,9 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import bot
+from myidm import apk_inspect
+from myidm import db
+from myidm import upload
 
 class TestNoCardInspection(unittest.TestCase):
     def setUp(self):
@@ -28,27 +30,27 @@ class TestNoCardInspection(unittest.TestCase):
         cert_B = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
 
         # 1. Either is None
-        self.assertIsNone(bot.format_signer_change_warning(None, None))
-        self.assertIsNone(bot.format_signer_change_warning({"package": "a"}, None))
-        self.assertIsNone(bot.format_signer_change_warning(None, {"package": "a"}))
+        self.assertIsNone(apk_inspect.format_signer_change_warning(None, None))
+        self.assertIsNone(apk_inspect.format_signer_change_warning({"package": "a"}, None))
+        self.assertIsNone(apk_inspect.format_signer_change_warning(None, {"package": "a"}))
 
         # 2. Cert missing in either
         info_no_cert = {"package": "a", "version_code": 2, "cert_sha256": None}
         prev_has_cert = {"package": "a", "version_code": 1, "cert_sha256": cert_A}
-        self.assertIsNone(bot.format_signer_change_warning(info_no_cert, prev_has_cert))
+        self.assertIsNone(apk_inspect.format_signer_change_warning(info_no_cert, prev_has_cert))
 
         info_has_cert = {"package": "a", "version_code": 2, "cert_sha256": cert_A}
         prev_no_cert = {"package": "a", "version_code": 1, "cert_sha256": None}
-        self.assertIsNone(bot.format_signer_change_warning(info_has_cert, prev_no_cert))
+        self.assertIsNone(apk_inspect.format_signer_change_warning(info_has_cert, prev_no_cert))
 
         # 3. Same cert (case-insensitive)
         prev_cert_A = {"package": "com.test", "version_code": 10, "cert_sha256": cert_A}
         info_same_cert = {"package": "com.test", "version_code": 11, "cert_sha256": cert_A.lower()}
-        self.assertIsNone(bot.format_signer_change_warning(info_same_cert, prev_cert_A))
+        self.assertIsNone(apk_inspect.format_signer_change_warning(info_same_cert, prev_cert_A))
 
         # 4. Different cert -> Generates warning
         info_diff_cert = {"package": "com.test", "version_code": 12, "cert_sha256": cert_B}
-        warn = bot.format_signer_change_warning(info_diff_cert, prev_cert_A)
+        warn = apk_inspect.format_signer_change_warning(info_diff_cert, prev_cert_A)
         self.assertIsNotNone(warn)
         self.assertIn("⚠️ تنبيه: توقيع النسخة دي مختلف عن النسخة اللي فاتت من نفس التطبيق", warn)
         self.assertIn("Warning: this version is signed differently from the previous version of this app", warn)
@@ -82,7 +84,7 @@ class TestNoCardInspection(unittest.TestCase):
                 "checked_at": time.time()
             }
 
-            await bot.handle_apk_inspection_card(
+            await apk_inspect.handle_apk_inspection_card(
                 file_path=self.golden_v1,
                 filename="fresh_app.apk",
                 user_id=99901,
@@ -112,7 +114,7 @@ class TestNoCardInspection(unittest.TestCase):
             pkg = f"com.same.signer_{int(time.time() * 1000)}"
 
             # Insert previous inspection v1 with cert_same
-            bot.db_add_apk_inspection(
+            db.db_add_apk_inspection(
                 user_id=99902,
                 package=pkg,
                 version_name="1.0",
@@ -147,7 +149,7 @@ class TestNoCardInspection(unittest.TestCase):
                 "checked_at": time.time()
             }
 
-            await bot.handle_apk_inspection_card(
+            await apk_inspect.handle_apk_inspection_card(
                 file_path=self.golden_v1,
                 filename="app_v2.apk",
                 user_id=99902,
@@ -174,7 +176,7 @@ class TestNoCardInspection(unittest.TestCase):
             pkg = f"com.diff.signer_{int(time.time() * 1000)}"
 
             # Insert previous inspection v1 with cert_orig
-            bot.db_add_apk_inspection(
+            db.db_add_apk_inspection(
                 user_id=99903,
                 package=pkg,
                 version_name="1.0",
@@ -209,7 +211,7 @@ class TestNoCardInspection(unittest.TestCase):
                 "checked_at": time.time()
             }
 
-            await bot.handle_apk_inspection_card(
+            await apk_inspect.handle_apk_inspection_card(
                 file_path=self.golden_v1,
                 filename="app_v20.apk",
                 user_id=99903,
@@ -247,7 +249,7 @@ class TestNoCardInspection(unittest.TestCase):
             user_msg.reply_text = AsyncMock()
 
             non_apk_file = os.path.join(self.apk_dir, "non_apk.zip")
-            await bot.handle_apk_inspection_card(
+            await apk_inspect.handle_apk_inspection_card(
                 file_path=non_apk_file,
                 filename="archive.zip",
                 user_id=99904,
@@ -266,7 +268,7 @@ class TestNoCardInspection(unittest.TestCase):
             cert = "4444444444444444444444444444444444444444444444444444444444444444"
 
             # Pre-populate DB with an inspection
-            bot.db_add_apk_inspection(
+            db.db_add_apk_inspection(
                 user_id=99905,
                 package=pkg,
                 version_name="1.0",
@@ -278,7 +280,7 @@ class TestNoCardInspection(unittest.TestCase):
             )
 
             # Check duplicate detection
-            dup = bot.db_check_apk_duplicate(pkg, vcode)
+            dup = db.db_check_apk_duplicate(pkg, vcode)
             self.assertIsNotNone(dup)
             self.assertEqual(dup["package"], pkg)
             self.assertEqual(dup["version_code"], vcode)
@@ -290,7 +292,7 @@ class TestNoCardInspection(unittest.TestCase):
             shutil.copyfile(self.golden_v1, temp_path)
 
             try:
-                pid = bot.db_add_pending_download(
+                pid = db.db_add_pending_download(
                     user_id=99905,
                     chat_id=1234567,
                     file_path=temp_path,
@@ -322,7 +324,7 @@ class TestNoCardInspection(unittest.TestCase):
 
                 with patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send:
                     mock_send.return_value = MagicMock()
-                    await bot.run_approved_pending_upload(pid, user_msg)
+                    await upload.run_approved_pending_upload(pid, user_msg)
 
                 # Approved duplicate produces:
                 # 1. status message ("📤 جاري الرفع المباشر إلى تليجرام...")

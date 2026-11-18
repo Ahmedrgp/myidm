@@ -9,12 +9,12 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import bot
+from myidm import keyboards
 
 class TestDashoff(unittest.TestCase):
     def test_start_keyboard_no_dashboard(self):
         # Admin start keyboard
-        kb_admin = bot.make_start_keyboard(lang="ar", is_admin=True)
+        kb_admin = keyboards.make_start_keyboard(lang="ar", is_admin=True)
         all_cb = [btn.callback_data for row in kb_admin.inline_keyboard for btn in row]
         self.assertNotIn("btn_get_dashboard", all_cb)
         self.assertIn("btn_admin_panel", all_cb)
@@ -25,7 +25,7 @@ class TestDashoff(unittest.TestCase):
         self.assertIn("btn_stats", all_cb)
 
         # Non-admin start keyboard
-        kb_user = bot.make_start_keyboard(lang="ar", is_admin=False)
+        kb_user = keyboards.make_start_keyboard(lang="ar", is_admin=False)
         all_cb_user = [btn.callback_data for row in kb_user.inline_keyboard for btn in row]
         self.assertNotIn("btn_get_dashboard", all_cb_user)
         self.assertNotIn("btn_admin_panel", all_cb_user)

@@ -13,7 +13,14 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import bot
+from myidm import apk_inspect
+from myidm import app
+from myidm import config as cfg
+from myidm import db
+from myidm import downloads
+from myidm import dupguard
+from myidm import keyboards
+from myidm import utils
 import myidm.config
 
 class TestDedupGuard(unittest.TestCase):
@@ -33,7 +40,7 @@ class TestDedupGuard(unittest.TestCase):
         myidm.config.PENDING_DIR = os.path.join(self.test_data_dir, "pending_downloads")
         os.makedirs(myidm.config.PENDING_DIR, exist_ok=True)
         
-        bot.init_db()
+        db.init_db()
 
     def tearDown(self):
         myidm.config.DATA_DIR = self.orig_data_dir
@@ -46,17 +53,17 @@ class TestDedupGuard(unittest.TestCase):
     # TASK 0: Data Persistence Verification
     # -------------------------------------------------------------
     def test_task0_data_persistence_config(self):
-        self.assertTrue(os.path.exists(bot.DATA_DIR))
-        self.assertTrue(os.path.exists(bot.PENDING_DIR))
-        self.assertTrue(os.path.exists(bot.DB_FILE))
+        self.assertTrue(os.path.exists(cfg.DATA_DIR))
+        self.assertTrue(os.path.exists(cfg.PENDING_DIR))
+        self.assertTrue(os.path.exists(cfg.DB_FILE))
         
         # Verify Pyrogram client workdir
-        self.assertEqual(str(bot.bot.workdir), str(self.orig_data_dir))
-        if bot.user_bot:
-            self.assertEqual(str(bot.user_bot.workdir), str(self.orig_data_dir))
+        self.assertEqual(str(app.bot.workdir), str(self.orig_data_dir))
+        if app.user_bot:
+            self.assertEqual(str(app.user_bot.workdir), str(self.orig_data_dir))
             
         # Verify required tables in SQLite
-        conn = sqlite3.connect(bot.DB_FILE)
+        conn = sqlite3.connect(cfg.DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = [r[0] for r in cursor.fetchall()]
@@ -73,10 +80,10 @@ class TestDedupGuard(unittest.TestCase):
     # -------------------------------------------------------------
     def test_task1_and_condition_duplicate_check(self):
         # 1. No record in DB -> NOT duplicate
-        self.assertIsNone(bot.db_check_apk_duplicate("com.example.test", 100))
+        self.assertIsNone(db.db_check_apk_duplicate("com.example.test", 100))
         
         # 2. Add an inspection record
-        bot.db_add_apk_inspection(
+        db.db_add_apk_inspection(
             user_id=123,
             package="com.example.test",
             version_name="1.0.0",
@@ -88,28 +95,28 @@ class TestDedupGuard(unittest.TestCase):
         )
         
         # 3. Exactly same package AND same version_code -> MATCH
-        dup = bot.db_check_apk_duplicate("com.example.test", 100)
+        dup = db.db_check_apk_duplicate("com.example.test", 100)
         self.assertIsNotNone(dup)
         self.assertEqual(dup["package"], "com.example.test")
         self.assertEqual(dup["version_code"], 100)
         
         # 4. Same package, DIFFERENT version_code -> NO MATCH
-        self.assertIsNone(bot.db_check_apk_duplicate("com.example.test", 101))
+        self.assertIsNone(db.db_check_apk_duplicate("com.example.test", 101))
         
         # 5. Different package, SAME version_code -> NO MATCH
-        self.assertIsNone(bot.db_check_apk_duplicate("com.example.other", 100))
+        self.assertIsNone(db.db_check_apk_duplicate("com.example.other", 100))
         
         # 6. Degraded (missing package or version_code) -> NO MATCH
-        self.assertIsNone(bot.db_check_apk_duplicate(None, 100))
-        self.assertIsNone(bot.db_check_apk_duplicate("com.example.test", None))
+        self.assertIsNone(db.db_check_apk_duplicate(None, 100))
+        self.assertIsNone(db.db_check_apk_duplicate("com.example.test", None))
 
     def test_task1_pending_download_lifecycle(self):
         # Create a dummy pending file
-        pending_file = os.path.join(bot.PENDING_DIR, "pending_test.apk")
+        pending_file = os.path.join(cfg.PENDING_DIR, "pending_test.apk")
         with open(pending_file, "wb") as f:
             f.write(b"PK\x03\x04test_apk_content")
             
-        pid = bot.db_add_pending_download(
+        pid = db.db_add_pending_download(
             user_id=12345,
             chat_id=12345,
             file_path=pending_file,
@@ -125,23 +132,23 @@ class TestDedupGuard(unittest.TestCase):
         )
         
         # Verify retrieval
-        row = bot.db_get_pending_download(pid)
+        row = db.db_get_pending_download(pid)
         self.assertIsNotNone(row)
         self.assertEqual(row["package"], "com.test.app")
         self.assertEqual(row["version_code"], 210)
         self.assertEqual(row["status"], "pending")
         
         # Update status
-        bot.db_update_pending_status(pid, "approved")
-        row_approved = bot.db_get_pending_download(pid)
+        db.db_update_pending_status(pid, "approved")
+        row_approved = db.db_get_pending_download(pid)
         self.assertEqual(row_approved["status"], "approved")
 
     def test_task1_24h_expiry_cleaner(self):
-        old_file = os.path.join(bot.PENDING_DIR, "old_expired.apk")
+        old_file = os.path.join(cfg.PENDING_DIR, "old_expired.apk")
         with open(old_file, "wb") as f:
             f.write(b"expired")
             
-        pid = bot.db_add_pending_download(
+        pid = db.db_add_pending_download(
             user_id=12345,
             chat_id=12345,
             file_path=old_file,
@@ -154,17 +161,17 @@ class TestDedupGuard(unittest.TestCase):
             status="pending"
         )
         # Manually backdate created_at to 25 hours ago
-        conn = sqlite3.connect(bot.DB_FILE)
+        conn = sqlite3.connect(cfg.DB_FILE)
         conn.cursor().execute("UPDATE pending_downloads SET created_at = ? WHERE id = ?", (time.time() - 90000, pid))
         conn.commit()
         conn.close()
         
         # Run cleaner
-        bot.cleanup_expired_pending_downloads()
+        db.cleanup_expired_pending_downloads()
         
         # Assert file was removed and status became expired
         self.assertFalse(os.path.exists(old_file))
-        row = bot.db_get_pending_download(pid)
+        row = db.db_get_pending_download(pid)
         self.assertEqual(row["status"], "expired")
 
     def test_task1_duplicate_warning_card_and_keyboard(self):
@@ -185,7 +192,7 @@ class TestDedupGuard(unittest.TestCase):
         }
         
         # Arabic card
-        card_ar = bot.format_duplicate_warning_card(info, prev, lang="ar")
+        card_ar = dupguard.format_duplicate_warning_card(info, prev, lang="ar")
         self.assertIn("تنبيه: تم تنزيل هذا التطبيق مسبقاً بنفس الإصدار!", card_ar)
         self.assertIn("com.duplicate.app", card_ar)
         self.assertIn("3.0.0 (300)", card_ar)
@@ -193,13 +200,13 @@ class TestDedupGuard(unittest.TestCase):
         self.assertIn("FEDCBA987654...", card_ar)
         
         # English card
-        card_en = bot.format_duplicate_warning_card(info, prev, lang="en")
+        card_en = dupguard.format_duplicate_warning_card(info, prev, lang="en")
         self.assertIn("Warning: Duplicate APK Download Detected!", card_en)
         self.assertIn("com.duplicate.app", card_en)
         self.assertIn("Same original signing certificate", card_en)
         
         # Keyboard buttons
-        kb = bot.make_duplicate_keyboard(42, lang="ar")
+        kb = keyboards.make_duplicate_keyboard(42, lang="ar")
         buttons = kb.inline_keyboard[0]
         self.assertEqual(buttons[0].callback_data, "dup_go_42")
         self.assertEqual(buttons[1].callback_data, "dup_no_42")
@@ -210,41 +217,41 @@ class TestDedupGuard(unittest.TestCase):
     # TASK 2: Disk Guard
     # -------------------------------------------------------------
     def test_task2_check_disk_space_rules(self):
-        reserve = int(bot.DISK_MIN_FREE_GB * (1024 ** 3))
+        reserve = int(cfg.DISK_MIN_FREE_GB * (1024 ** 3))
         
         # Rule 1: Known size -> free >= needed * 1.25 + reserve
         with patch("shutil.disk_usage") as mock_usage:
             # Case A: Free space is plenty
             mock_usage.return_value = MagicMock(free=int(100 * 1024 * 1024 * 1.25 + reserve + 1000), total=10**11)
-            ok, needed, free, res = bot.check_disk_space(bot.DOWNLOAD_DIR, 100 * 1024 * 1024)
+            ok, needed, free, res = utils.check_disk_space(cfg.DOWNLOAD_DIR, 100 * 1024 * 1024)
             self.assertTrue(ok)
             
             # Case B: Free space is insufficient
             mock_usage.return_value = MagicMock(free=int(100 * 1024 * 1024 * 1.25 + reserve - 1000), total=10**11)
-            ok, needed, free, res = bot.check_disk_space(bot.DOWNLOAD_DIR, 100 * 1024 * 1024)
+            ok, needed, free, res = utils.check_disk_space(cfg.DOWNLOAD_DIR, 100 * 1024 * 1024)
             self.assertFalse(ok)
             
             # Rule 2: Unknown size -> free >= reserve * 2
             mock_usage.return_value = MagicMock(free=int(reserve * 2 + 1000), total=10**11)
-            ok, needed, free, res = bot.check_disk_space(bot.DOWNLOAD_DIR, None)
+            ok, needed, free, res = utils.check_disk_space(cfg.DOWNLOAD_DIR, None)
             self.assertTrue(ok)
             
             mock_usage.return_value = MagicMock(free=int(reserve * 2 - 1000), total=10**11)
-            ok, needed, free, res = bot.check_disk_space(bot.DOWNLOAD_DIR, 0)
+            ok, needed, free, res = utils.check_disk_space(cfg.DOWNLOAD_DIR, 0)
             self.assertFalse(ok)
             
             # Rule 3: Splitting check -> free >= piece_size + reserve
             piece_size = 1900 * 1024 * 1024
             mock_usage.return_value = MagicMock(free=piece_size + reserve + 500, total=10**11)
-            ok, psize, free, res = bot.check_disk_space_for_split(bot.DOWNLOAD_DIR, piece_size)
+            ok, psize, free, res = utils.check_disk_space_for_split(cfg.DOWNLOAD_DIR, piece_size)
             self.assertTrue(ok)
             
             mock_usage.return_value = MagicMock(free=piece_size + reserve - 500, total=10**11)
-            ok, psize, free, res = bot.check_disk_space_for_split(bot.DOWNLOAD_DIR, piece_size)
+            ok, psize, free, res = utils.check_disk_space_for_split(cfg.DOWNLOAD_DIR, piece_size)
             self.assertFalse(ok)
 
     def test_task2_cleanup_temp_dir_retention(self):
-        temp_dir = bot.DOWNLOAD_DIR
+        temp_dir = cfg.DOWNLOAD_DIR
         os.makedirs(temp_dir, exist_ok=True)
         
         file_fresh = os.path.join(temp_dir, "fresh_file.tmp")
@@ -262,12 +269,12 @@ class TestDedupGuard(unittest.TestCase):
         os.utime(file_fresh, (now - 1 * 3600, now - 1 * 3600))
         
         # Pending file inside PENDING_DIR must NEVER be touched
-        pending_protected = os.path.join(bot.PENDING_DIR, "protected.apk")
+        pending_protected = os.path.join(cfg.PENDING_DIR, "protected.apk")
         with open(pending_protected, "w") as f:
             f.write("protected")
         os.utime(pending_protected, (now - 10 * 3600, now - 10 * 3600))
         
-        bot.cleanup_temp_dir(max_age_hours=6.0)
+        downloads.cleanup_temp_dir(max_age_hours=6.0)
         
         # Assert orphan > 6h deleted, fresh preserved, pending untouched
         self.assertFalse(os.path.exists(file_old))
@@ -284,18 +291,20 @@ class TestDedupGuard(unittest.TestCase):
     # TASK 3: Security Mini-Pack Verification
     # -------------------------------------------------------------
     def test_task3_zero_eval_in_bot(self):
-        with open("bot.py", "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertNotIn("eval(", content)
-        self.assertNotIn("/eval", content)
+        import glob
+        for path in ["bot.py"] + sorted(glob.glob(os.path.join("myidm", "*.py"))):
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertNotIn("eval(", content)
+            self.assertNotIn("/eval", content)
 
     def test_task3_dashboard_secret_persistence(self):
         # When DASHBOARD_SECRET env var is not set, secret comes from bot_meta in DB
-        secret1 = bot.get_or_create_dashboard_secret()
+        secret1 = db.get_or_create_dashboard_secret()
         self.assertGreaterEqual(len(secret1), 24)
         
         # Query DB directly
-        conn = sqlite3.connect(bot.DB_FILE)
+        conn = sqlite3.connect(cfg.DB_FILE)
         cursor = conn.cursor()
         cursor.execute("SELECT value FROM bot_meta WHERE key = 'dashboard_secret'")
         row = cursor.fetchone()
@@ -305,7 +314,7 @@ class TestDedupGuard(unittest.TestCase):
         self.assertEqual(row[0], secret1)
         
         # Subsequent call returns the SAME secret
-        secret2 = bot.get_or_create_dashboard_secret()
+        secret2 = db.get_or_create_dashboard_secret()
         self.assertEqual(secret1, secret2)
 
     def test_task3_requirements_pinned(self):
@@ -342,7 +351,7 @@ class TestDedupGuard(unittest.TestCase):
         }
         
         # Test English Bundle Card
-        card_en = bot.format_apk_inspection_card(bundle_info, prev=None, lang="en")
+        card_en = apk_inspect.format_apk_inspection_card(bundle_info, prev=None, lang="en")
         self.assertIn("Delivered Bundle Size:", card_en)
         self.assertIn("Delivered Bundle SHA-256:", card_en)
         self.assertIn("BUNDLE_SHA256_HASH_1234567890", card_en)
@@ -352,7 +361,7 @@ class TestDedupGuard(unittest.TestCase):
         self.assertIn("BASE_APK_SHA256_HASH_0987654321", card_en)
         
         # Test Arabic Bundle Card
-        card_ar = bot.format_apk_inspection_card(bundle_info, prev=None, lang="ar")
+        card_ar = apk_inspect.format_apk_inspection_card(bundle_info, prev=None, lang="ar")
         self.assertIn("حجم الحزمة (Bundle):", card_ar)
         self.assertIn("بصمة الحزمة SHA-256:", card_ar)
         self.assertIn("ملف APK الأساسي: <code>base.apk</code>", card_ar)
@@ -363,29 +372,29 @@ class TestDedupGuard(unittest.TestCase):
         pkg = "com.signer.test"
         
         # Initial version 1.0 (vcode 10)
-        bot.db_add_apk_inspection(1, pkg, "1.0", 10, "HASH1", "CERT_ORIGINAL", 1000, "v1.apk")
+        db.db_add_apk_inspection(1, pkg, "1.0", 10, "HASH1", "CERT_ORIGINAL", 1000, "v1.apk")
         
         # Previous inspection for vcode 10 -> None (because exclude_version_code=10)
-        prev = bot.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=10)
+        prev = db.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=10)
         self.assertIsNone(prev)
         
         # Re-downloading the SAME version 1.0 (vcode 10) approved -> records second inspection with vcode 10
-        bot.db_add_apk_inspection(1, pkg, "1.0", 10, "HASH1", "CERT_ORIGINAL", 1000, "v1_copy.apk")
-        prev = bot.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=10)
+        db.db_add_apk_inspection(1, pkg, "1.0", 10, "HASH1", "CERT_ORIGINAL", 1000, "v1_copy.apk")
+        prev = db.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=10)
         # MUST still be None because no other version_code exists!
         self.assertIsNone(prev)
         
         # Now a new release 1.1 (vcode 11) with SAME cert
-        prev = bot.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=11)
+        prev = db.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=11)
         self.assertIsNotNone(prev)
         self.assertEqual(prev["version_code"], 10)
         self.assertEqual(prev["cert_sha256"], "CERT_ORIGINAL")
         
         # Now record version 1.1
-        bot.db_add_apk_inspection(1, pkg, "1.1", 11, "HASH2", "CERT_ORIGINAL", 1050, "v1_1.apk")
+        db.db_add_apk_inspection(1, pkg, "1.1", 11, "HASH2", "CERT_ORIGINAL", 1050, "v1_1.apk")
         
         # Now release 2.0 (vcode 20) with CHANGED cert
-        prev = bot.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=20)
+        prev = db.db_get_last_inspection_for_package(pkg, exclude_latest=True, exclude_version_code=20)
         self.assertIsNotNone(prev)
         self.assertEqual(prev["version_code"], 11) # latest was v1.1
         self.assertEqual(prev["cert_sha256"], "CERT_ORIGINAL")

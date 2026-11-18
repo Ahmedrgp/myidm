@@ -19,7 +19,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import bot
+from myidm import apk_inspect
+from myidm import app
 from myidm import config as cfg
 from myidm import db
 from myidm import texts
@@ -276,7 +277,7 @@ class TestContractParity(unittest.TestCase):
             from myidm import apk_inspect as _ai
             fmt_fn = _ai.format_blitzverify_block
         except ImportError:
-            fmt_fn = bot.format_blitzverify_block
+            fmt_fn = apk_inspect.format_blitzverify_block
 
         fixtures = {
             "full": {
@@ -416,7 +417,7 @@ class TestContractParity(unittest.TestCase):
             from myidm import clients as _cl
             tg_bot = _cl.bot
         except ImportError:
-            tg_bot = bot.bot
+            tg_bot = app.bot
 
         if not tg_bot.dispatcher.groups.get(0) and not tg_bot.loop.is_running():
             tg_bot.loop.run_until_complete(asyncio.sleep(0))

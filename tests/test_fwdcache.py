@@ -14,7 +14,12 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import bot
+from myidm import apk_inspect
+from myidm import app
+from myidm import callbacks
+from myidm import db
+from myidm import downloads
+from myidm import fwdcache
 import myidm.config
 
 class TestFwdCache(unittest.IsolatedAsyncioTestCase):
@@ -36,7 +41,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         os.makedirs(myidm.config.DOWNLOAD_DIR, exist_ok=True)
         os.makedirs(myidm.config.PENDING_DIR, exist_ok=True)
 
-        bot.init_db()
+        db.init_db()
 
         self.user_id = 1594244556
         self.chat_id = 1594244556
@@ -80,7 +85,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
     async def test_repeat_url_forwarded_no_download(self):
         """Case 1: Repeat URL -> stored ids forwarded in order; download engine NOT invoked; note with fwd_fresh_ button sent."""
         url = "https://example.com/files/archive.zip"
-        row_id = bot.db_record_delivery(
+        row_id = db.db_record_delivery(
             user_id=self.user_id,
             url_key=url,
             filename="archive.zip",
@@ -93,9 +98,9 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         user_msg = self._make_user_msg()
         status_msg = self._make_status_msg()
 
-        with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
+        with patch.object(app.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
              patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
-            await bot.handle_url_intake(
+            await fwdcache.handle_url_intake(
                 url=url,
                 custom_name="",
                 custom_caption="",
@@ -132,7 +137,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
     async def test_forward_raising_message_id_invalid_deletes_row_and_falls_through(self):
         """Case 2: Forward raising MessageIdInvalid -> row deleted and fresh-download path invoked."""
         url = "https://example.com/stale/document.pdf"
-        row_id = bot.db_record_delivery(
+        row_id = db.db_record_delivery(
             user_id=self.user_id,
             url_key=url,
             filename="document.pdf",
@@ -140,17 +145,17 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             chat_id=self.chat_id,
             message_ids=[801]
         )
-        self.assertIsNotNone(bot.db_get_delivery_by_id(row_id))
+        self.assertIsNotNone(db.db_get_delivery_by_id(row_id))
 
         user_msg = self._make_user_msg()
         status_msg = self._make_status_msg()
 
-        with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
+        with patch.object(app.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
              patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine, \
              self.assertLogs("bot", level="WARNING") as logs:
             mock_fwd.side_effect = MessageIdInvalid()
 
-            await bot.handle_url_intake(
+            await fwdcache.handle_url_intake(
                 url=url,
                 custom_name="custom_doc",
                 custom_caption="caption",
@@ -159,8 +164,8 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             )
 
             # Stale row must be deleted
-            self.assertIsNone(bot.db_get_delivery_by_id(row_id))
-            self.assertIsNone(bot.db_get_delivery(self.user_id, url))
+            self.assertIsNone(db.db_get_delivery_by_id(row_id))
+            self.assertIsNone(db.db_get_delivery(self.user_id, url))
 
             # One WARNING logged
             self.assertTrue(any("Forward failed for delivery id=" in l and "Deleting stale row" in l for l in logs.output))
@@ -171,7 +176,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
     async def test_fwd_fresh_callback_runs_fresh_download(self):
         """Case 3: fwd_fresh_<id> callback -> fresh download runs even though a row exists."""
         url = "https://example.com/app/release.apk"
-        row_id = bot.db_record_delivery(
+        row_id = db.db_record_delivery(
             user_id=self.user_id,
             url_key=url,
             filename="release.apk",
@@ -179,7 +184,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             chat_id=self.chat_id,
             message_ids=[901]
         )
-        self.assertIsNotNone(bot.db_get_delivery_by_id(row_id))
+        self.assertIsNotNone(db.db_get_delivery_by_id(row_id))
 
         query = MagicMock()
         query.data = f"fwd_fresh_{row_id}"
@@ -195,7 +200,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
 
         with patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine, \
              patch("myidm.config.is_admin", return_value=True):
-            await bot.callback_handler(bot.bot, query)
+            await callbacks.callback_handler(app.bot, query)
             # Give background task time to run
             await asyncio.sleep(0.01)
 
@@ -213,7 +218,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
     async def test_split_delivery_forwards_all_parts_in_order(self):
         """Case 4: Split delivery (3 stored ids) -> all 3 forwarded in order."""
         url = "https://example.com/large/system_image.iso"
-        row_id = bot.db_record_delivery(
+        row_id = db.db_record_delivery(
             user_id=self.user_id,
             url_key=url,
             filename="system_image.iso",
@@ -225,9 +230,9 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         user_msg = self._make_user_msg()
         status_msg = self._make_status_msg()
 
-        with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
+        with patch.object(app.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
              patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
-            await bot.handle_url_intake(
+            await fwdcache.handle_url_intake(
                 url=url,
                 custom_name="",
                 custom_caption="",
@@ -251,7 +256,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         checked_epoch = 1730000000.0
 
         # Store inspection in apk_inspections with realistic min_sdk and target_sdk
-        bot.db_add_apk_inspection(
+        db.db_add_apk_inspection(
             user_id=self.user_id,
             package=pkg,
             version_name="1.5.0",
@@ -266,7 +271,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         )
 
         # Store delivery with package + version_code
-        bot.db_record_delivery(
+        db.db_record_delivery(
             user_id=self.user_id,
             url_key=url,
             filename="game.apk",
@@ -280,9 +285,9 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         user_msg = self._make_user_msg()
         status_msg = self._make_status_msg()
 
-        with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
+        with patch.object(app.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
              patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
-            await bot.handle_url_intake(
+            await fwdcache.handle_url_intake(
                 url=url,
                 custom_name="",
                 custom_caption="",
@@ -306,7 +311,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(block_reply["kwargs"].get("parse_mode"), ParseMode.MARKDOWN)
 
             # Build expected block directly using format_blitzverify_block on the stored inspection row
-            stored_insp = bot.db_check_apk_duplicate(pkg, vcode)
+            stored_insp = db.db_check_apk_duplicate(pkg, vcode)
             expected_info = {
                 "package": stored_insp["package"],
                 "version_name": stored_insp["version_name"],
@@ -318,7 +323,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
                 "cert_sha256": stored_insp["cert_sha256"],
                 "checked_at": stored_insp["checked_at"]
             }
-            expected_block = bot.format_blitzverify_block(expected_info)
+            expected_block = apk_inspect.format_blitzverify_block(expected_info)
 
             # Verify byte-identical re-emission and that SDK fields are present
             self.assertEqual(block_reply["text"], expected_block)
@@ -330,7 +335,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         """Case 6: Same URL, different user -> no match, normal flow."""
         url = "https://example.com/shared/manual.pdf"
         # User A downloads
-        bot.db_record_delivery(
+        db.db_record_delivery(
             user_id=11111,
             url_key=url,
             filename="manual.pdf",
@@ -343,9 +348,9 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         user_msg = self._make_user_msg(user_id=22222, chat_id=22222)
         status_msg = self._make_status_msg()
 
-        with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
+        with patch.object(app.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
              patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
-            await bot.handle_url_intake(
+            await fwdcache.handle_url_intake(
                 url=url,
                 custom_name="",
                 custom_caption="",
@@ -363,7 +368,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         url_v1 = "https://an1.com/game-download.html#file_version=1"
         url_v2 = "https://an1.com/game-download.html#file_version=2"
 
-        bot.db_record_delivery(
+        db.db_record_delivery(
             user_id=self.user_id,
             url_key=url_v1,
             filename="game_v1.apk",
@@ -375,9 +380,9 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         user_msg = self._make_user_msg()
         status_msg = self._make_status_msg()
 
-        with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
+        with patch.object(app.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
              patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
-            await bot.handle_url_intake(
+            await fwdcache.handle_url_intake(
                 url=url_v2,
                 custom_name="",
                 custom_caption="",
@@ -392,7 +397,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
     async def test_re_download_replaces_row(self):
         """Verify that freshly re-downloading the same URL replaces the row with newest delivery."""
         url = "https://example.com/firmware.bin"
-        bot.db_record_delivery(
+        db.db_record_delivery(
             user_id=self.user_id,
             url_key=url,
             filename="firmware.bin",
@@ -401,11 +406,11 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             message_ids=[101],
             created_at=1000
         )
-        row1 = bot.db_get_delivery(self.user_id, url)
+        row1 = db.db_get_delivery(self.user_id, url)
         self.assertEqual(row1["message_ids"], [101])
 
         # New delivery replaces old delivery
-        bot.db_record_delivery(
+        db.db_record_delivery(
             user_id=self.user_id,
             url_key=url,
             filename="firmware.bin",
@@ -414,7 +419,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             message_ids=[202],
             created_at=2000
         )
-        row2 = bot.db_get_delivery(self.user_id, url)
+        row2 = db.db_get_delivery(self.user_id, url)
         self.assertEqual(row2["message_ids"], [202])
         self.assertEqual(row2["total_size"], 2000)
         self.assertEqual(row2["created_at"], 2000)
@@ -438,7 +443,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
              patch("myidm.downloads.download_video_or_m3u8", new_callable=AsyncMock, return_value=(True, test_file, "test_doc.mp4")), \
              patch("myidm.validation.is_valid_binary_file", return_value=(True, b"")), \
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg):
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url=url,
                 custom_name="",
                 custom_caption="",
@@ -446,7 +451,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
                 user_msg=user_msg
             )
 
-        row = bot.db_get_delivery(self.user_id, url)
+        row = db.db_get_delivery(self.user_id, url)
         self.assertIsNotNone(row)
         self.assertEqual(row["message_ids"], [777])
         self.assertEqual(row["filename"], "test doc.mp4")
@@ -461,7 +466,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
 
         with patch("myidm.resolvers.unrestrict_direct_link", new_callable=AsyncMock, side_effect=Exception("Network failure")):
             try:
-                await bot.process_download_and_upload(
+                await downloads.process_download_and_upload(
                     raw_url=url,
                     custom_name="",
                     custom_caption="",
@@ -471,7 +476,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             except Exception:
                 pass
 
-        row = bot.db_get_delivery(self.user_id, url)
+        row = db.db_get_delivery(self.user_id, url)
         self.assertIsNone(row)
 
     async def test_delivery_recorded_for_apk_with_package_and_version(self):
@@ -505,7 +510,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
              patch("myidm.db.db_check_apk_duplicate", return_value=None), \
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg), \
              patch("myidm.apk_inspect.handle_apk_inspection_card", new_callable=AsyncMock):
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url=url,
                 custom_name="",
                 custom_caption="",
@@ -513,7 +518,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
                 user_msg=user_msg
             )
 
-        row = bot.db_get_delivery(self.user_id, url)
+        row = db.db_get_delivery(self.user_id, url)
         self.assertIsNotNone(row)
         self.assertEqual(row["message_ids"], [888])
         self.assertEqual(row["package"], "com.mock.app")
@@ -523,7 +528,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         """Fresh-inspection test: after db_add_apk_inspection with SDK values, db_get_apk_inspection returns them."""
         pkg = "com.test.fresh_sdk"
         vcode = 42
-        row_id = bot.db_add_apk_inspection(
+        row_id = db.db_add_apk_inspection(
             user_id=self.user_id,
             package=pkg,
             version_name="2.1.0",
@@ -537,7 +542,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             target_sdk=35
         )
         self.assertIsNotNone(row_id)
-        insp = bot.db_get_apk_inspection(pkg, vcode)
+        insp = db.db_get_apk_inspection(pkg, vcode)
         self.assertIsNotNone(insp)
         self.assertEqual(insp["package"], pkg)
         self.assertEqual(insp["version_code"], vcode)
@@ -622,7 +627,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         myidm.config.DB_FILE = legacy_db_path
         try:
             # 1. First startup / migration
-            bot.init_db()
+            db.init_db()
 
             # Verify columns exist
             conn = sqlite3.connect(legacy_db_path)
@@ -635,7 +640,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             self.assertIn("target_sdk", cols)
 
             # Query the pre-existing row: min_sdk and target_sdk should be None (NULL)
-            legacy_insp = bot.db_get_apk_inspection("com.legacy.app", 1)
+            legacy_insp = db.db_get_apk_inspection("com.legacy.app", 1)
             self.assertIsNotNone(legacy_insp)
             self.assertIsNone(legacy_insp["min_sdk"])
             self.assertIsNone(legacy_insp["target_sdk"])
@@ -653,15 +658,15 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
                 "min_sdk": legacy_insp.get("min_sdk"),
                 "target_sdk": legacy_insp.get("target_sdk")
             }
-            block = bot.format_blitzverify_block(insp_info)
+            block = apk_inspect.format_blitzverify_block(insp_info)
             self.assertNotIn("min_sdk:", block)
             self.assertNotIn("target_sdk:", block)
 
             # 2. Second startup / migration must be a completely silent no-op
-            bot.init_db()
+            db.init_db()
 
             # 3. New inspection with SDK values works on the migrated DB
-            bot.db_add_apk_inspection(
+            db.db_add_apk_inspection(
                 user_id=self.user_id,
                 package="com.migrated.app",
                 version_name="2.0",
@@ -673,7 +678,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
                 min_sdk=26,
                 target_sdk=34
             )
-            migrated_insp = bot.db_get_apk_inspection("com.migrated.app", 2)
+            migrated_insp = db.db_get_apk_inspection("com.migrated.app", 2)
             self.assertIsNotNone(migrated_insp)
             self.assertEqual(migrated_insp["min_sdk"], 26)
             self.assertEqual(migrated_insp["target_sdk"], 34)

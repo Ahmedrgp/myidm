@@ -1,0 +1,9 @@
+.git
+__pycache__
+*.pyc
+.pytest_cache
+.aiexclude
+myidm-restructure-*.md
+*.db
+*.session
+*.log

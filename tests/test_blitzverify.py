@@ -11,7 +11,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import bot
+from myidm import apk_inspect
 from pyrogram.enums import ParseMode
 
 class TestBlitzverify(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestBlitzverify(unittest.TestCase):
         }
 
     def test_formatter_full_sample(self):
-        msg = bot.format_blitzverify_block(self.sample_full)
+        msg = apk_inspect.format_blitzverify_block(self.sample_full)
         self.assertTrue(msg.startswith("```\n"))
         self.assertTrue(msg.endswith("\n```"))
 
@@ -60,7 +60,7 @@ class TestBlitzverify(unittest.TestCase):
         sample["cert_sha256"] = None
         sample["target_sdk"] = None
 
-        msg = bot.format_blitzverify_block(sample)
+        msg = apk_inspect.format_blitzverify_block(sample)
         body = msg.strip().strip("`").strip("\r\n")
         lines = body.splitlines()
 
@@ -94,7 +94,7 @@ class TestBlitzverify(unittest.TestCase):
             "base_apk_sha256": "CCCCCCC1111222233334444555566667777888899990000AAAABBBBCCCCDDDD",
             "checked_at": 1730000000.0
         }
-        msg = bot.format_blitzverify_block(bundle_info)
+        msg = apk_inspect.format_blitzverify_block(bundle_info)
         body = msg.strip().strip("`").strip("\r\n")
         lines = body.splitlines()
 
@@ -120,7 +120,7 @@ class TestBlitzverify(unittest.TestCase):
             "cert_sha256": None,
             "checked_at": None
         }
-        msg = bot.format_blitzverify_block(degraded)
+        msg = apk_inspect.format_blitzverify_block(degraded)
         body = msg.strip().strip("`").strip("\r\n")
         lines = body.splitlines()
 
@@ -133,8 +133,8 @@ class TestBlitzverify(unittest.TestCase):
         self.assertEqual(lines, expected_lines)
 
     def test_empty_info(self):
-        self.assertEqual(bot.format_blitzverify_block({}), "")
-        self.assertEqual(bot.format_blitzverify_block(None), "")
+        self.assertEqual(apk_inspect.format_blitzverify_block({}), "")
+        self.assertEqual(apk_inspect.format_blitzverify_block(None), "")
 
     async def async_test_handle_card_emits_card_and_block(self):
         user_msg = MagicMock()
@@ -149,7 +149,7 @@ class TestBlitzverify(unittest.TestCase):
 
         user_msg.reply_text = AsyncMock(side_effect=reply_mock)
 
-        await bot.handle_apk_inspection_card(
+        await apk_inspect.handle_apk_inspection_card(
             file_path="tests_apk/golden_v1.apk",
             filename="golden_v1.apk",
             user_id=123456,

@@ -10,7 +10,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from bot import (
+from myidm.apk_inspect import (
     inspect_apk,
     format_dn,
     compute_file_sha256,

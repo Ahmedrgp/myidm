@@ -11,7 +11,8 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import bot
+from myidm import downloads
+from myidm import upload
 import myidm.config
 
 async def start_local_test_server():
@@ -64,7 +65,7 @@ async def run_end_to_end_test():
             print("1. Real HTTP Download of Non-APK (PDF)")
             print("==========================================")
             replies.clear()
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url="http://127.0.0.1:8899/document.pdf",
                 custom_name="",
                 custom_caption="",
@@ -91,7 +92,7 @@ async def run_end_to_end_test():
             conn.close()
 
             replies.clear()
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url="http://127.0.0.1:8899/test_app.apk",
                 custom_name="",
                 custom_caption="",
@@ -118,7 +119,7 @@ async def run_end_to_end_test():
             print("3. Real HTTP Download of SAME APK (Duplicate Detection - Paused)")
             print("==========================================")
             replies.clear()
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url="http://127.0.0.1:8899/test_app.apk",
                 custom_name="",
                 custom_caption="",
@@ -145,7 +146,7 @@ async def run_end_to_end_test():
             pending_id = pending_row[0]
 
             replies.clear()
-            await bot.run_approved_pending_upload(pending_id, user_msg)
+            await upload.run_approved_pending_upload(pending_id, user_msg)
             print(f"Approved upload produced {len(replies)} reply messages:")
             for idx, r in enumerate(replies):
                 print(f"Reply {idx+1}:\n{r}\n")

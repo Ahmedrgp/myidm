@@ -15,7 +15,10 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import bot
+from myidm import config as cfg
+from myidm import db
+from myidm import downloads
+from myidm import validation
 import myidm.config
 
 class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
@@ -37,7 +40,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
         os.makedirs(myidm.config.DOWNLOAD_DIR, exist_ok=True)
         os.makedirs(myidm.config.PENDING_DIR, exist_ok=True)
 
-        bot.init_db()
+        db.init_db()
 
         # Start ephemeral local HTTP server to serve real test file bytes
         self.app = web.Application()
@@ -78,44 +81,44 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
 
         # 1. ssl.SSLCertVerificationError
         cert_err = ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1016)")
-        self.assertTrue(bot.is_cert_verification_error(cert_err))
+        self.assertTrue(validation.is_cert_verification_error(cert_err))
 
         # 2. aiohttp.ClientConnectorCertificateError
         aio_cert_err = aiohttp.ClientConnectorCertificateError(dummy_key, cert_err)
-        self.assertTrue(bot.is_cert_verification_error(aio_cert_err))
+        self.assertTrue(validation.is_cert_verification_error(aio_cert_err))
 
         # 3. Text containing CERTIFICATE_VERIFY_FAILED
         custom_err = Exception("Cannot connect to host example.com:443 ssl:True [SSL: CERTIFICATE_VERIFY_FAILED] verify failed")
-        self.assertTrue(bot.is_cert_verification_error(custom_err))
+        self.assertTrue(validation.is_cert_verification_error(custom_err))
 
         # 4. curl_cffi CertificateVerifyError if available
-        if bot.CURL_CFFI_AVAILABLE:
+        if cfg.CURL_CFFI_AVAILABLE:
             try:
                 from curl_cffi.requests.exceptions import CertificateVerifyError
                 c_err = CertificateVerifyError("curl: (60) SSL certificate OpenSSL verify result: unable to get local issuer certificate")
-                self.assertTrue(bot.is_cert_verification_error(c_err))
+                self.assertTrue(validation.is_cert_verification_error(c_err))
             except ImportError:
                 pass
 
         # 5. NEGATIVE: NON-certificate SSL errors
         non_cert_ssl1 = ssl.SSLError(1, "[SSL: WRONG_VERSION_NUMBER] wrong version number (_ssl.c:1016)")
-        self.assertFalse(bot.is_cert_verification_error(non_cert_ssl1))
+        self.assertFalse(validation.is_cert_verification_error(non_cert_ssl1))
 
         non_cert_ssl2 = aiohttp.ClientConnectorSSLError(dummy_key, non_cert_ssl1)
-        self.assertFalse(bot.is_cert_verification_error(non_cert_ssl2))
+        self.assertFalse(validation.is_cert_verification_error(non_cert_ssl2))
 
         handshake_err = aiohttp.ClientConnectorSSLError(dummy_key, ssl.SSLError(1, "[SSL: SSLV3_ALERT_HANDSHAKE_FAILURE] handshake failure"))
-        self.assertFalse(bot.is_cert_verification_error(handshake_err))
+        self.assertFalse(validation.is_cert_verification_error(handshake_err))
 
         # 6. NEGATIVE: Normal connection/network errors
         dns_err = aiohttp.ClientConnectorError(dummy_key, OSError(11001, "getaddrinfo failed"))
-        self.assertFalse(bot.is_cert_verification_error(dns_err))
+        self.assertFalse(validation.is_cert_verification_error(dns_err))
 
         conn_refused = aiohttp.ClientConnectorError(dummy_key, ConnectionRefusedError(10061, "Connect call failed"))
-        self.assertFalse(bot.is_cert_verification_error(conn_refused))
+        self.assertFalse(validation.is_cert_verification_error(conn_refused))
 
         timeout_err = aiohttp.ServerTimeoutError("Server timeout")
-        self.assertFalse(bot.is_cert_verification_error(timeout_err))
+        self.assertFalse(validation.is_cert_verification_error(timeout_err))
 
     async def test_sslretry_success_after_one_unverified_retry(self):
         """
@@ -168,7 +171,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
              self.assertLogs("bot", level="WARNING") as captured_logs:
 
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url=self.test_url,
                 custom_name="",
                 custom_caption="",
@@ -189,7 +192,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
         success_card = replies[0]
 
         # 3. Final success message contains the bilingual notice line
-        self.assertIn(bot.TLS_VERIFICATION_SKIPPED_NOTICE, success_card)
+        self.assertIn(cfg.TLS_VERIFICATION_SKIPPED_NOTICE, success_card)
         self.assertIn("🔓 تم تجاوز التحقق من الشهادة لهذا المضيف (سلسلة شهادة ناقصة)", success_card)
         self.assertIn("TLS verification skipped for this host (broken certificate chain)", success_card)
 
@@ -239,7 +242,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
              patch("aiohttp.TCPConnector", FakeNonCertSSLConnector), \
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
 
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url=self.test_url,
                 custom_name="",
                 custom_caption="",
@@ -296,7 +299,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
              patch("aiohttp.TCPConnector", FakeRefusedConnector), \
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
 
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url=self.test_url,
                 custom_name="",
                 custom_caption="",
@@ -353,7 +356,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
              patch("aiohttp.TCPConnector", FakeAlwaysFailCertConnector), \
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
 
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url=self.test_url,
                 custom_name="",
                 custom_caption="",
@@ -374,7 +377,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
         If curl_cffi is available, verify that when curl_cffi fails specifically on certificate verification,
         it retries with verify=False, succeeds, and adds the bilingual notice line to the success card.
         """
-        if not bot.CURL_CFFI_AVAILABLE:
+        if not cfg.CURL_CFFI_AVAILABLE:
             self.skipTest("curl_cffi is not installed in this environment")
 
         from curl_cffi.requests.exceptions import CertificateVerifyError
@@ -423,7 +426,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
              self.assertLogs("bot", level="WARNING") as captured_logs:
 
-            await bot.process_download_and_upload(
+            await downloads.process_download_and_upload(
                 raw_url="https://fs21.uploadrar.com:183/fake/file.pdf",
                 custom_name="",
                 custom_caption="",
@@ -439,7 +442,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
         # Assert file was delivered and bilingual notice line is present
         self.assertTrue(mock_send_media.called)
         self.assertEqual(len(replies), 1)
-        self.assertIn(bot.TLS_VERIFICATION_SKIPPED_NOTICE, replies[0])
+        self.assertIn(cfg.TLS_VERIFICATION_SKIPPED_NOTICE, replies[0])
 
         # Assert clear WARNING logged
         warning_logs = [log for log in captured_logs.output if "TLS certificate verification failed" in log]
