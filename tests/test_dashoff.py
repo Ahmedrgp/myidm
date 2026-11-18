@@ -47,7 +47,7 @@ class TestDashoff(unittest.TestCase):
         self.assertIn('admin_kbd = InlineKeyboardMarkup([\n                [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]\n            ])', src)
 
     def test_web_server_routes_preserved(self):
-        with open("bot.py", "r", encoding="utf-8") as f:
+        with open(os.path.join("myidm", "dashboard.py"), "r", encoding="utf-8") as f:
             src = f.read()
 
         self.assertIn("async def handle_dashboard_view", src)
@@ -55,6 +55,10 @@ class TestDashoff(unittest.TestCase):
         self.assertIn("async def handle_dashboard_cancel_task_api", src)
         self.assertIn('app.router.add_get("/dashboard", handle_dashboard_view)', src)
         self.assertIn('app.router.add_get("/api/dashboard/stats", handle_dashboard_stats_api)', src)
+
+        with open(os.path.join("myidm", "db.py"), "r", encoding="utf-8") as f:
+            src = f.read()
+
         self.assertIn("get_or_create_dashboard_secret", src)
 
 if __name__ == "__main__":
