@@ -94,7 +94,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_msg = self._make_status_msg()
 
         with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
-             patch("bot.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
+             patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
             await bot.handle_url_intake(
                 url=url,
                 custom_name="",
@@ -146,7 +146,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_msg = self._make_status_msg()
 
         with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
-             patch("bot.process_download_and_upload", new_callable=AsyncMock) as mock_engine, \
+             patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine, \
              self.assertLogs("bot", level="WARNING") as logs:
             mock_fwd.side_effect = MessageIdInvalid()
 
@@ -193,7 +193,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_mock = AsyncMock()
         query.message.reply_text.return_value = status_mock
 
-        with patch("bot.process_download_and_upload", new_callable=AsyncMock) as mock_engine, \
+        with patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine, \
              patch("bot.is_admin", return_value=True):
             await bot.callback_handler(bot.bot, query)
             # Give background task time to run
@@ -226,7 +226,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_msg = self._make_status_msg()
 
         with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
-             patch("bot.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
+             patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
             await bot.handle_url_intake(
                 url=url,
                 custom_name="",
@@ -281,7 +281,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_msg = self._make_status_msg()
 
         with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
-             patch("bot.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
+             patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
             await bot.handle_url_intake(
                 url=url,
                 custom_name="",
@@ -344,7 +344,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_msg = self._make_status_msg()
 
         with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
-             patch("bot.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
+             patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
             await bot.handle_url_intake(
                 url=url,
                 custom_name="",
@@ -376,7 +376,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_msg = self._make_status_msg()
 
         with patch.object(bot.bot, "forward_messages", new_callable=AsyncMock) as mock_fwd, \
-             patch("bot.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
+             patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine:
             await bot.handle_url_intake(
                 url=url_v2,
                 custom_name="",
@@ -433,9 +433,9 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         status_msg = self._make_status_msg()
         url = "https://example.com/test_doc.mp4"
 
-        with patch("bot.unrestrict_direct_link", new_callable=AsyncMock, return_value=url), \
-             patch("bot.is_hls_or_video_stream", return_value=True), \
-             patch("bot.download_video_or_m3u8", new_callable=AsyncMock, return_value=(True, test_file, "test_doc.mp4")), \
+        with patch("myidm.resolvers.unrestrict_direct_link", new_callable=AsyncMock, return_value=url), \
+             patch("myidm.resolvers.is_hls_or_video_stream", return_value=True), \
+             patch("myidm.downloads.download_video_or_m3u8", new_callable=AsyncMock, return_value=(True, test_file, "test_doc.mp4")), \
              patch("myidm.validation.is_valid_binary_file", return_value=(True, b"")), \
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg):
             await bot.process_download_and_upload(
@@ -459,7 +459,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         user_msg = self._make_user_msg()
         status_msg = self._make_status_msg()
 
-        with patch("bot.unrestrict_direct_link", new_callable=AsyncMock, side_effect=Exception("Network failure")):
+        with patch("myidm.resolvers.unrestrict_direct_link", new_callable=AsyncMock, side_effect=Exception("Network failure")):
             try:
                 await bot.process_download_and_upload(
                     raw_url=url,
@@ -497,12 +497,12 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             "checked_at": 1730000000.0
         }
 
-        with patch("bot.unrestrict_direct_link", new_callable=AsyncMock, return_value=url), \
-             patch("bot.is_hls_or_video_stream", return_value=True), \
-             patch("bot.download_video_or_m3u8", new_callable=AsyncMock, return_value=(True, test_file, "test_app.apk")), \
+        with patch("myidm.resolvers.unrestrict_direct_link", new_callable=AsyncMock, return_value=url), \
+             patch("myidm.resolvers.is_hls_or_video_stream", return_value=True), \
+             patch("myidm.downloads.download_video_or_m3u8", new_callable=AsyncMock, return_value=(True, test_file, "test_app.apk")), \
              patch("myidm.validation.is_valid_binary_file", return_value=(True, b"")), \
              patch("myidm.apk_inspect.inspect_apk", return_value=apk_inspect_data), \
-             patch("bot.db_check_apk_duplicate", return_value=None), \
+             patch("myidm.db.db_check_apk_duplicate", return_value=None), \
              patch("myidm.upload.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg), \
              patch("myidm.apk_inspect.handle_apk_inspection_card", new_callable=AsyncMock):
             await bot.process_download_and_upload(
