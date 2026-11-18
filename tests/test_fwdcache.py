@@ -194,7 +194,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         query.message.reply_text.return_value = status_mock
 
         with patch("myidm.downloads.process_download_and_upload", new_callable=AsyncMock) as mock_engine, \
-             patch("bot.is_admin", return_value=True):
+             patch("myidm.config.is_admin", return_value=True):
             await bot.callback_handler(bot.bot, query)
             # Give background task time to run
             await asyncio.sleep(0.01)

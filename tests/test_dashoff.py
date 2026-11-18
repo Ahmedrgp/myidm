@@ -31,13 +31,17 @@ class TestDashoff(unittest.TestCase):
         self.assertNotIn("btn_admin_panel", all_cb_user)
 
     def test_admin_panel_callback_keyboard(self):
-        # Read bot.py source around btn_admin_panel to check admin_kbd definition
-        with open("bot.py", "r", encoding="utf-8") as f:
-            src = f.read()
+        # Read bot.py and myidm/*.py sources around btn_admin_panel to check admin_kbd definition
+        import glob
+        for path in ["bot.py"] + sorted(glob.glob(os.path.join("myidm", "*.py"))):
+            with open(path, "r", encoding="utf-8") as f:
+                src = f.read()
+            self.assertNotIn("btn_get_dashboard", src)
+            self.assertNotIn("dashboard_command", src)
+            self.assertNotIn('BotCommand("dashboard"', src)
 
-        self.assertNotIn("btn_get_dashboard", src)
-        self.assertNotIn("dashboard_command", src)
-        self.assertNotIn('BotCommand("dashboard"', src)
+        with open(os.path.join("myidm", "callbacks.py"), "r", encoding="utf-8") as f:
+            src = f.read()
 
         # Confirm admin_kbd structure
         self.assertIn('admin_kbd = InlineKeyboardMarkup([\n                [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]\n            ])', src)
