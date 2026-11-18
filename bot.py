@@ -31,6 +31,12 @@ from myidm import state
 from myidm import texts
 from myidm import db
 from myidm import utils
+from myidm import clients
+from myidm import keyboards
+from myidm import validation
+from myidm import dupguard
+from myidm import apk_inspect
+from myidm import upload
 
 # Transitional Phase 1-5 re-exports for un-moved code in bot.py and un-migrated tests
 _safe_ok_parse_json = myidm._safe_ok_parse_json
@@ -103,6 +109,39 @@ smart_extract_filename = utils.smart_extract_filename
 parse_chat_id = utils.parse_chat_id
 check_disk_space = utils.check_disk_space
 check_disk_space_for_split = utils.check_disk_space_for_split
+
+make_start_keyboard = keyboards.make_start_keyboard
+make_settings_keyboard = keyboards.make_settings_keyboard
+make_brand_keyboard = keyboards.make_brand_keyboard
+make_back_keyboard = keyboards.make_back_keyboard
+make_cancel_keyboard = keyboards.make_cancel_keyboard
+make_duplicate_keyboard = keyboards.make_duplicate_keyboard
+progress_bar = keyboards.progress_bar
+safe_edit_text = keyboards.safe_edit_text
+
+is_valid_binary_file = validation.is_valid_binary_file
+extract_video_embed_from_html = validation.extract_video_embed_from_html
+extract_real_download_link_from_html = validation.extract_real_download_link_from_html
+is_cert_verification_error = validation.is_cert_verification_error
+
+format_duplicate_warning_card = dupguard.format_duplicate_warning_card
+
+compute_file_sha256 = apk_inspect.compute_file_sha256
+format_dn = apk_inspect.format_dn
+parse_axml = apk_inspect.parse_axml
+extract_v1_cert = apk_inspect.extract_v1_cert
+extract_v2_v3_cert = apk_inspect.extract_v2_v3_cert
+inspect_apk = apk_inspect.inspect_apk
+format_apk_inspection_card = apk_inspect.format_apk_inspection_card
+format_signer_change_warning = apk_inspect.format_signer_change_warning
+format_blitzverify_block = apk_inspect.format_blitzverify_block
+handle_apk_inspection_card = apk_inspect.handle_apk_inspection_card
+
+extract_video_metadata = upload.extract_video_metadata
+build_file_caption = upload.build_file_caption
+resilient_send_media = upload.resilient_send_media
+process_single_local_file_upload = upload.process_single_local_file_upload
+run_approved_pending_upload = upload.run_approved_pending_upload
 
 _DYNAMIC_CFG_ATTRS = frozenset({"DATA_DIR", "DB_FILE", "PENDING_DIR", "DOWNLOAD_DIR", "DISK_MIN_FREE_GB"})
 
@@ -500,189 +539,8 @@ if USER_SESSION_STRING:
         workers=16
     )
 
-def get_uploader_client():
-    if user_bot and getattr(user_bot, "is_connected", False):
-        return user_bot
-    return bot
-
-# ==========================================
-# 6. فحص التوقيع الرقمي للبايتات (Binary Magic Bytes Signature Verification)
-# ==========================================
-def is_valid_binary_file(filepath: str) -> tuple:
-    if not filepath or not os.path.exists(filepath):
-        return False, ""
-    
-    file_size = os.path.getsize(filepath)
-    if file_size == 0:
-        return False, ""
-
-    try:
-        with open(filepath, "rb") as f:
-            header = f.read(8192)
-    except Exception:
-        return False, ""
-
-    # إذا كان الملف يحتوي على بايتات فارغة (null bytes)، فهو حتماً ملف ثنائي وليس صفحة HTML
-    if b"\x00" in header:
-        return True, ""
-
-    # تواقيع الملفات الثنائية المعروفة
-    known_magic = (
-        b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08",  # ZIP, APK, JAR, DOCX, etc.
-        b"\x1f\x8b",                                  # GZIP
-        b"Rar!\x1a\x07",                              # RAR
-        b"7z\xbc\xaf\x27\x1c",                        # 7Z
-        b"%PDF",                                      # PDF
-        b"\xff\xd8\xff",                              # JPEG
-        b"\x89PNG\r\n\x1a\n",                         # PNG
-        b"GIF87a", b"GIF89a",                         # GIF
-        b"RIFF",                                      # WEBP, AVI, WAV
-        b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2",# MP3
-        b"OggS",                                      # OGG
-        b"fLaC",                                      # FLAC
-        b"\x1aE\xdf\xa3",                             # MKV, WEBM
-        b"MZ",                                        # EXE, DLL
-        b"\x7fELF",                                   # Linux ELF
-    )
-    if any(header.startswith(sig) for sig in known_magic):
-        return True, ""
-
-    # فحص صريح لنصوص HTML
-    header_lower = header.lstrip().lower()
-    html_signatures = (
-        b"<!doctype html", b"<html", b"<?xml", b"<head", b"<script", b"<!--",
-        b"<body", b"<div", b"<title"
-    )
-    if any(header_lower.startswith(sig) for sig in html_signatures) or (b"<html" in header_lower[:1024]):
-        try:
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f_full:
-                return False, f_full.read(300 * 1024)
-        except Exception:
-            return False, header.decode("utf-8", errors="ignore")
-
-    # إذا لم يكن يحتوي على وسوم HTML، فهو ملف صالح (مثل ملفات نصية، ترجمات srt، كود، إلخ)
-    return True, ""
-
-def extract_video_embed_from_html(html_text: str, original_url: str) -> tuple:
-    """استخراج مشغلات وسيرفرات الفيديو المضمنة في صفحات المشاهدة (مثل AhwakTV، FaselHD، وغيرها)"""
-    if not html_text:
-        return None, None
-
-    # استخراج عنوان الفيلم أو الحلقة بدقة
-    title_match = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html_text, re.I)
-    if not title_match:
-        title_match = re.search(r'<title>([^<]+)</title>', html_text, re.I)
-
-    extracted_title = ""
-    if title_match:
-        raw_t = html.unescape(title_match.group(1)).strip()
-        cleaned = re.split('[-|\u2013\u2014•»]', raw_t)[0].strip()
-        cleaned = re.sub(r'[\\/*?:"<>|]', '', cleaned).strip()
-        extracted_title = cleaned
-
-    candidate_urls = []
-
-    # 1. عناصر قوائم السيرفرات (WatchList / data-embed-url / data-url / data-src)
-    embed_attrs = [
-        r'<li[^>]*data-embed-url=["\']([^"\']+)["\']',
-        r'data-embed-url=["\']([^"\']+)["\']',
-        r'data-url=["\']([^"\']+)["\']',
-        r'data-src=["\']([^"\']+)["\']',
-        r'data-embed=["\']([^"\']+)["\']'
-    ]
-    for pattern in embed_attrs:
-        for match in re.findall(pattern, html_text, re.I):
-            clean = html.unescape(match).strip()
-            if clean.startswith("//"):
-                clean = "https:" + clean
-            if clean.startswith("http"):
-                candidate_urls.append(clean)
-
-    # 2. إطارات iframes المضمنة
-    for ifr in re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', html_text, re.I):
-        clean = html.unescape(ifr).strip()
-        if clean.startswith("//"):
-            clean = "https:" + clean
-        if clean.startswith("http"):
-            candidate_urls.append(clean)
-
-    # 3. تدفقات الفيديو المباشرة ومصادر HTML5 video في كود الصفحة
-    for v in re.findall(r'(https?://[^\s"\'<>]+\.(?:m3u8|mpd|mp4)[^\s"\'<>]*)', html_text, re.I):
-        candidate_urls.append(v)
-
-    # استبعاد روابط التواصل الاجتماعي والإعلانات
-    ignore_domains = ["facebook.com", "twitter.com", "x.com", "google.com", "disqus.com", "analytics", "doubleclick", "mg.pamphiltre"]
-    unique_candidates = []
-    seen = set()
-    for c in candidate_urls:
-        if c not in seen and not any(ign in c.lower() for ign in ignore_domains):
-            seen.add(c)
-            unique_candidates.append(c)
-
-    # ترتيب الأفضلية: تفضيل سيرفرات OK.ru ثم Dood و Streamwish وباقي السيرفرات
-    priority_hosts = [
-        "ok.ru", "odnoklassniki", "dood", "streamwish", "filelions", "vidtube",
-        "streamtape", "mixdrop", "mp4upload", "vidspeed", "voe.sx", "uqload", "vk.com"
-    ]
-
-    sorted_candidates = sorted(
-        unique_candidates,
-        key=lambda u: next((i for i, h in enumerate(priority_hosts) if h in u.lower()), 999)
-    )
-
-    if sorted_candidates:
-        best_candidate = sorted_candidates[0]
-        m_ok = re.search(r'(?:ok\.ru/video/|ok\.ru/videoembed/)(\d+)', best_candidate)
-        if m_ok:
-            best_candidate = f"https://ok.ru/videoembed/{m_ok.group(1)}"
-        return best_candidate, extracted_title
-
-    return None, extracted_title
-
-def extract_real_download_link_from_html(html_text: str, original_url: str) -> str:
-    if not html_text:
-        return ""
-
-    # فحص روابط تأكيد التحميل لملفات Google Drive الكبيرة
-    if "drive.google.com" in original_url or "drive.usercontent.google.com" in original_url:
-        g_confirm = re.search(r'href=["\'](/uc\?export=download&[^"\']+)["\']', html_text)
-        if g_confirm:
-            return "https://drive.google.com" + html.unescape(g_confirm.group(1))
-        g_confirm2 = re.search(r'href=["\'](https://drive\.usercontent\.google\.com/download\?[^"\']+)["\']', html_text)
-        if g_confirm2:
-            return html.unescape(g_confirm2.group(1))
-
-    # فحص مشغلات الفيديو وسيرفرات الأفلام أولاً
-    video_embed, video_title = extract_video_embed_from_html(html_text, original_url)
-    if video_embed:
-        title_part = f"&title={urllib.parse.quote(video_title)}" if video_title else ""
-        return f"{video_embed}#ref={urllib.parse.quote(original_url)}{title_part}"
-
-    forbidden = ["an1store.apk", "store.apk", "googleplay", "telegram", "play.google.com", "ad.doubleclick"]
-    all_links = re.findall(r'href=["\'](https?://[^"\']+)["\']', html_text)
-    
-    candidate_links = []
-    for link in all_links:
-        link_lower = link.lower()
-        if any(f in link_lower for f in forbidden):
-            continue
-
-        if any(link_lower.endswith(ext) or f"{ext}?" in link_lower for ext in ('.apk', '.xapk', '.apks', '.zip', '.rar', '.7z')):
-            candidate_links.append(link)
-        elif any(kw in link_lower for kw in ("d.an1.com", "d.an1.net", "/downloads/", "/download/", "download_link", "file_download")):
-            candidate_links.append(link)
-
-    if candidate_links:
-        parsed_orig = urllib.parse.urlparse(original_url)
-        orig_name = os.path.basename(parsed_orig.path).replace(".html", "")
-        if orig_name:
-            orig_name_clean = re.sub(r'[^a-zA-Z0-9]', '', orig_name.split('-')[0]).lower()
-            for cl in candidate_links:
-                if orig_name_clean and orig_name_clean in cl.lower():
-                    return cl
-        return candidate_links[0]
-
-    return ""
+clients.register_clients(bot, user_bot)
+get_uploader_client = clients.get_uploader_client
 
 async def unrestrict_terabox(url: str) -> tuple:
     """فك تشفير واستخراج رابط التنزيل المباشر واسم الملف من TeraBox تلقائياً"""
@@ -853,7 +711,7 @@ async def unrestrict_direct_link(url: str) -> str:
                         if an1_direct:
                             return an1_direct[0]
                         
-                        extracted = extract_real_download_link_from_html(html_sample, url)
+                        extracted = validation.extract_real_download_link_from_html(html_sample, url)
                         if extracted:
                             return extracted
         except Exception:
@@ -967,870 +825,13 @@ async def unrestrict_direct_link(url: str) -> str:
                 except Exception:
                     html_sample = content_bytes.decode("cp1256", errors="ignore")
 
-                extracted = extract_real_download_link_from_html(html_sample, url)
+                extracted = validation.extract_real_download_link_from_html(html_sample, url)
                 if extracted:
                     return extracted
     except Exception:
         pass
 
     return url
-
-def make_start_keyboard(lang: str = "ar", is_admin: bool = False):
-    buttons = [
-        [
-            InlineKeyboardButton(tr(lang, "btn_panel"), callback_data="btn_god_panel"),
-            InlineKeyboardButton(tr(lang, "btn_history"), callback_data="btn_history")
-        ],
-        [
-            InlineKeyboardButton(tr(lang, "btn_settings"), callback_data="btn_settings"),
-            InlineKeyboardButton(tr(lang, "btn_probe"), callback_data="btn_probe_info")
-        ],
-        [
-            InlineKeyboardButton(tr(lang, "btn_stats"), callback_data="btn_stats")
-        ]
-    ]
-    if is_admin:
-        buttons.append([InlineKeyboardButton("لوحة المسؤول (Admin Panel)", callback_data="btn_admin_panel")])
-    return InlineKeyboardMarkup(buttons)
-
-def make_settings_keyboard(user_id: int):
-    st = db_get_user_settings(user_id)
-    lang = st["lang"]
-    mode_str = tr(lang, "btn_mode_auto") if st["upload_mode"] == "auto" else tr(lang, "btn_mode_doc")
-    threads_str = tr(lang, "btn_threads", threads=st['god_threads'])
-    lang_btn_str = "🌐 اللغة: 🇸🇦 العربية" if lang == "ar" else "🌐 Language: 🇺🇸 English"
-    caption_str = tr(lang, "btn_caption_on") if st.get("enable_caption", 1) else tr(lang, "btn_caption_off")
-    thumbs_str = tr(lang, "btn_thumbs_on") if st.get("enable_thumbs", 1) else tr(lang, "btn_thumbs_off")
-    clean_str = tr(lang, "btn_cleantags_on") if st.get("clean_tags", 1) else tr(lang, "btn_cleantags_off")
-    
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(lang_btn_str, callback_data="toggle_lang")],
-        [InlineKeyboardButton(mode_str, callback_data="toggle_mode")],
-        [InlineKeyboardButton(threads_str, callback_data="toggle_threads")],
-        [InlineKeyboardButton(caption_str, callback_data="toggle_caption"), InlineKeyboardButton(thumbs_str, callback_data="toggle_thumbs")],
-        [InlineKeyboardButton(clean_str, callback_data="toggle_cleantags")],
-        [InlineKeyboardButton("حقوق القناة (Branding)", callback_data="btn_open_brand")],
-        [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
-    ])
-
-def make_brand_keyboard(user_id: int):
-    st = db_get_user_settings(user_id)
-    b_pos = st.get("brand_position", "suffix")
-    pos_desc = "في النهاية (Suffix)" if b_pos == "suffix" else ("في البداية (Prefix)" if b_pos == "prefix" else "معطل ❌")
-    pos_text = f"🏷️ موضع الاسم: {pos_desc}"
-    btn_state = "🔘 زر القناة بالملف: مفعل ✅" if st.get("channel_button", 1) else "🔘 زر القناة بالملف: معطل ❌"
-    cur_ch = st.get("channel_tag") or "غير محدد ❌"
-    
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📢 القناة: {cur_ch}", callback_data="btn_brand_help")],
-        [InlineKeyboardButton(pos_text, callback_data="toggle_brand_pos")],
-        [InlineKeyboardButton(btn_state, callback_data="toggle_brand_btn")],
-        [InlineKeyboardButton("🗑️ مسح القناة والحقوق", callback_data="btn_clear_brand")],
-        [InlineKeyboardButton("🔙 العودة للإعدادات", callback_data="btn_settings")]
-    ])
-
-def make_back_keyboard(lang: str = "ar"):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(tr(lang, "btn_back"), callback_data="btn_start")]
-    ])
-
-def make_cancel_keyboard(task_id: str, lang: str = "ar"):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(tr(lang, "btn_cancel"), callback_data=f"cancel_{task_id}")]
-    ])
-
-async def progress_bar(current: int, total: int, status_text: str, message: Message, start_time: float, last_update: list, icon: str = "⬇️", task_id: str = None, lang: str = "ar"):
-    now = time.time()
-    
-    while len(last_update) < 3:
-        last_update.append(0)
-        
-    last_time = last_update[0]
-    last_bytes = last_update[1]
-    
-    if current != total and last_time > 0 and (now - last_time) < 2.5:
-        return
-
-    time_delta = now - last_time if last_time > 0 else (now - start_time)
-    bytes_delta = current - last_bytes if last_bytes > 0 else current
-
-    instant_speed = bytes_delta / time_delta if time_delta > 0 else 0
-    if instant_speed <= 0:
-        overall_diff = now - start_time
-        instant_speed = current / overall_diff if overall_diff > 0 else 0
-
-    last_update[0] = now
-    last_update[1] = current
-    last_update[2] = instant_speed
-
-    speed = instant_speed
-    percentage = (current * 100 / total) if total else 0
-    time_to_completion = round((total - current) / speed) if (total and speed > 0) else 0
-    
-    filled_blocks = math.floor(percentage / 10) if total else 5
-    bar = '▰' * filled_blocks + '▱' * (10 - filled_blocks)
-    
-    total_str = humanbytes(total) if total else "..."
-    perc_str = f"{round(percentage, 1)}%" if total else "N/A"
-    eta_str = time_formatter(time_to_completion) if total else "..."
-
-    header = f"{icon} <b>{status_text}</b>" if icon and icon not in ("🌌", "⚡", "👑", "🚀", "🔥") else f"<b>{status_text}</b>"
-    text = (
-        f"{header}\n"
-        f"<code>{bar}</code> <b>{perc_str}</b>\n\n"
-        f"{tr(lang, 'transfer_rate')} <code>{humanbytes(speed)}/s</code>\n"
-        f"{tr(lang, 'processed_size')} <code>{humanbytes(current)}</code> / <code>{total_str}</code>\n"
-        f"{tr(lang, 'eta')} <code>{eta_str}</code>"
-    )
-    
-    reply_markup = make_cancel_keyboard(task_id, lang=lang) if task_id else None
-    
-    try:
-        await message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
-    except FloodWait as e:
-        await asyncio.sleep(e.value + 1)
-    except (RPCError, MessageNotModified):
-        pass
-
-async def safe_edit_text(message: Message | None, text: str, *args, **kwargs) -> Message | None:
-    """
-    Safely edits a Telegram message text, swallowing MessageNotModified
-    so that no-op or identical-text status edits never crash or abort execution.
-    """
-    if message is None:
-        return None
-    try:
-        return await message.edit_text(text, *args, **kwargs)
-    except MessageNotModified:
-        logger.debug(f"MessageNotModified swallowed on edit_text for message {getattr(message, 'id', None)}")
-        return message
-
-# ==========================================
-# 8.1. محرك فحص تطبيقات أندرويد (APK Inspection Card Engine - apkinspect)
-# ==========================================
-def compute_file_sha256(filepath: str, chunk_size: int = 8 * 1024 * 1024) -> str:
-    h = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest().upper()
-
-def format_dn(name: x509.Name) -> str:
-    try:
-        parts = []
-        for attr in name:
-            oid_name = attr.oid._name
-            val = str(attr.value)
-            if oid_name == "commonName":
-                parts.append(f"CN={val}")
-            elif oid_name == "organizationName":
-                parts.append(f"O={val}")
-            elif oid_name == "organizationalUnitName":
-                parts.append(f"OU={val}")
-            elif oid_name == "countryName":
-                parts.append(f"C={val}")
-            elif oid_name == "stateOrProvinceName":
-                parts.append(f"ST={val}")
-            elif oid_name == "localityName":
-                parts.append(f"L={val}")
-            elif oid_name == "emailAddress":
-                parts.append(f"emailAddress={val}")
-            else:
-                label = oid_name or attr.oid.dotted_string
-                parts.append(f"{label}={val}")
-        if parts:
-            return ", ".join(parts)
-        return name.rfc4514_string()
-    except Exception:
-        return name.rfc4514_string()
-
-def parse_axml(raw: bytes) -> dict:
-    result = {
-        "package": None,
-        "version_name": None,
-        "version_code": None,
-        "min_sdk": None,
-        "target_sdk": None,
-        "label": None,
-    }
-    if not raw or len(raw) < 8:
-        return result
-    try:
-        magic, header_size, file_size = struct.unpack_from('<HHI', raw, 0)
-        if magic != 0x0003:  # RES_XML_TYPE
-            return result
-        
-        offset = header_size
-        strings = []
-        res_ids = []
-        
-        RES_LABEL = 0x01010001
-        RES_NAME = 0x01010003
-        RES_MIN_SDK = 0x0101020c
-        RES_VERSION_CODE = 0x0101021b
-        RES_VERSION_NAME = 0x0101021c
-        RES_TARGET_SDK = 0x01010270
-
-        while offset + 8 <= len(raw):
-            chunk_type, chunk_header_size, chunk_size = struct.unpack_from('<HHI', raw, offset)
-            if chunk_size == 0 or offset + chunk_size > len(raw):
-                break
-                
-            if chunk_type == 0x0001:  # RES_STRING_POOL_TYPE
-                if chunk_size >= 28:
-                    str_cnt, sty_cnt, flags, str_start, sty_start = struct.unpack_from('<IIIII', raw, offset + 8)
-                    is_utf8 = bool(flags & 0x0100)
-                    offsets_start = offset + 28
-                    if offsets_start + str_cnt * 4 <= offset + chunk_size:
-                        offsets = struct.unpack_from(f'<{str_cnt}I', raw, offsets_start)
-                        base_str = offset + str_start
-                        for off in offsets:
-                            cur = base_str + off
-                            if cur >= len(raw):
-                                strings.append("")
-                                continue
-                            try:
-                                if is_utf8:
-                                    b1 = raw[cur]; cur += 1
-                                    if b1 & 0x80:
-                                        cur += 1
-                                    b2 = raw[cur]; cur += 1
-                                    if b2 & 0x80:
-                                        b3 = raw[cur]; cur += 1
-                                        byte_len = ((b2 & 0x7F) << 8) | b3
-                                    else:
-                                        byte_len = b2
-                                    s = raw[cur:cur + byte_len].decode('utf-8', errors='replace')
-                                else:
-                                    u16_len = struct.unpack_from('<H', raw, cur)[0]
-                                    cur += 2
-                                    if u16_len & 0x8000:
-                                        u16_len2 = struct.unpack_from('<H', raw, cur)[0]
-                                        cur += 2
-                                        u16_len = ((u16_len & 0x7FFF) << 16) | u16_len2
-                                    byte_len = u16_len * 2
-                                    s = raw[cur:cur + byte_len].decode('utf-16le', errors='replace')
-                                strings.append(s)
-                            except Exception:
-                                strings.append("")
-
-            elif chunk_type == 0x0180:  # RES_XML_RESOURCE_MAP_TYPE
-                count = (chunk_size - chunk_header_size) // 4
-                if count > 0:
-                    res_ids = list(struct.unpack_from(f'<{count}I', raw, offset + chunk_header_size))
-
-            elif chunk_type == 0x0102:  # RES_XML_START_ELEMENT_TYPE
-                if offset + 30 <= len(raw):
-                    ns_idx, name_idx = struct.unpack_from('<II', raw, offset + 16)
-                    attr_start, attr_size, attr_count = struct.unpack_from('<HHH', raw, offset + 24)
-                    tag_name = strings[name_idx] if name_idx < len(strings) else ""
-                    
-                    attrs_base = offset + 16 + attr_start
-                    for i in range(attr_count):
-                        attr_offset = attrs_base + i * attr_size
-                        if attr_offset + 20 > len(raw):
-                            break
-                        a_ns, a_name, a_raw_val, a_type_data, a_data = struct.unpack_from('<IIIII', raw, attr_offset)
-                        data_type = (a_type_data >> 24) & 0xFF
-                        
-                        attr_name = strings[a_name] if a_name < len(strings) else ""
-                        attr_res_id = res_ids[a_name] if a_name < len(res_ids) else 0
-                        
-                        val_str = strings[a_raw_val] if (0 <= a_raw_val < len(strings)) else None
-                        if val_str is None and data_type == 0x03:
-                            if 0 <= a_data < len(strings):
-                                val_str = strings[a_data]
-
-                        if tag_name == "manifest":
-                            if attr_name == "package":
-                                result["package"] = val_str or (strings[a_data] if 0 <= a_data < len(strings) else None)
-                            elif attr_name == "versionName" or attr_res_id == RES_VERSION_NAME:
-                                result["version_name"] = val_str or (strings[a_data] if data_type == 0x03 and 0 <= a_data < len(strings) else str(a_data))
-                            elif attr_name == "versionCode" or attr_res_id == RES_VERSION_CODE:
-                                if data_type in (0x10, 0x11):
-                                    result["version_code"] = a_data
-                                elif val_str and val_str.isdigit():
-                                    result["version_code"] = int(val_str)
-                                elif a_data:
-                                    result["version_code"] = a_data
-                                    
-                        elif tag_name == "uses-sdk":
-                            if attr_name == "minSdkVersion" or attr_res_id == RES_MIN_SDK:
-                                if data_type in (0x10, 0x11):
-                                    result["min_sdk"] = a_data
-                                elif val_str:
-                                    result["min_sdk"] = int(val_str) if val_str.isdigit() else val_str
-                                else:
-                                    result["min_sdk"] = a_data
-                            elif attr_name == "targetSdkVersion" or attr_res_id == RES_TARGET_SDK:
-                                if data_type in (0x10, 0x11):
-                                    result["target_sdk"] = a_data
-                                elif val_str:
-                                    result["target_sdk"] = int(val_str) if val_str.isdigit() else val_str
-                                else:
-                                    result["target_sdk"] = a_data
-
-                        elif tag_name == "application":
-                            if attr_name == "label" or attr_res_id == RES_LABEL:
-                                if data_type == 0x03 and 0 <= a_data < len(strings):
-                                    cand = strings[a_data]
-                                    if not cand.startswith("@") and not cand.startswith("res/"):
-                                        result["label"] = cand
-                                elif val_str and not val_str.startswith("@") and not val_str.startswith("res/"):
-                                    result["label"] = val_str
-
-            offset += chunk_size
-    except Exception:
-        pass
-    return result
-
-def extract_v1_cert(z: zipfile.ZipFile):
-    for f in z.namelist():
-        upper = f.upper()
-        if upper.startswith("META-INF/") and upper.endswith((".RSA", ".DSA", ".EC")):
-            try:
-                data = z.read(f)
-                certs = pkcs7.load_der_pkcs7_certificates(data)
-                if certs:
-                    return certs[0]
-            except Exception:
-                continue
-    return None
-
-def extract_v2_v3_cert(filepath: str):
-    try:
-        with open(filepath, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            if size < 32:
-                return None
-            max_search = min(size, 65535 + 22)
-            f.seek(size - max_search)
-            buf = f.read(max_search)
-            pos = buf.rfind(b"PK\x05\x06")
-            if pos == -1:
-                return None
-            cd_offset = struct.unpack_from("<I", buf, pos + 16)[0]
-            if cd_offset < 24 or cd_offset > size:
-                return None
-            
-            f.seek(cd_offset - 24)
-            footer = f.read(24)
-            if len(footer) < 24:
-                return None
-            size_of_block, magic = struct.unpack("<Q16s", footer)
-            if magic != b"APK Sig Block 42":
-                return None
-            block_start = cd_offset - size_of_block - 8
-            if block_start < 0:
-                return None
-            f.seek(block_start)
-            header = f.read(8)
-            if struct.unpack("<Q", header)[0] != size_of_block:
-                return None
-            
-            pairs_len = size_of_block - 24
-            pairs_data = f.read(pairs_len)
-            offset = 0
-            v2_payload = None
-            v3_payload = None
-            while offset + 12 <= len(pairs_data):
-                pair_len, pair_id = struct.unpack_from("<QI", pairs_data, offset)
-                val_len = pair_len - 4
-                val_start = offset + 12
-                if val_start + val_len > len(pairs_data):
-                    break
-                if pair_id == 0x7109871a:  # v2
-                    v2_payload = pairs_data[val_start:val_start + val_len]
-                elif pair_id == 0xf05368c0:  # v3
-                    v3_payload = pairs_data[val_start:val_start + val_len]
-                offset += 8 + pair_len
-                
-            payload = v2_payload or v3_payload
-            if not payload or len(payload) < 8:
-                return None
-            
-            signers_len = struct.unpack_from("<I", payload, 0)[0]
-            pos = 4
-            if pos + signers_len > len(payload):
-                return None
-            signer_len = struct.unpack_from("<I", payload, pos)[0]
-            pos += 4
-            if pos + signer_len > len(payload):
-                return None
-            signed_data_len = struct.unpack_from("<I", payload, pos)[0]
-            pos += 4
-            if pos + signed_data_len > len(payload):
-                return None
-            digests_len = struct.unpack_from("<I", payload, pos)[0]
-            pos += 4 + digests_len
-            if pos + 4 > len(payload):
-                return None
-            certs_len = struct.unpack_from("<I", payload, pos)[0]
-            pos += 4
-            if certs_len < 4 or pos + 4 > len(payload):
-                return None
-            first_cert_len = struct.unpack_from("<I", payload, pos)[0]
-            pos += 4
-            if pos + first_cert_len > len(payload):
-                return None
-            cert_bytes = payload[pos:pos + first_cert_len]
-            return x509.load_der_x509_certificate(cert_bytes)
-    except Exception:
-        return None
-
-def inspect_apk(file_path: str) -> dict | None:
-    if not file_path or not os.path.exists(file_path):
-        return None
-    
-    file_size = os.path.getsize(file_path)
-    if file_size == 0:
-        return None
-        
-    try:
-        is_bin, _ = is_valid_binary_file(file_path)
-        if not is_bin:
-            return None
-    except Exception:
-        pass
-        
-    if not zipfile.is_zipfile(file_path):
-        return None
-        
-    try:
-        file_sha256 = compute_file_sha256(file_path)
-    except Exception:
-        return None
-        
-    checked_at = time.time()
-    
-    is_bundle = False
-    bundle_rule_en = None
-    bundle_rule_ar = None
-    base_apk_entry_name = None
-    base_apk_size = None
-    base_apk_sha256 = None
-    target_apk_path = file_path
-    temp_extracted_apk = None
-    
-    clean_name = os.path.basename(file_path).lower()
-    if clean_name.endswith((".xapk", ".apks")):
-        is_bundle = True
-        try:
-            with zipfile.ZipFile(file_path, "r") as z_bundle:
-                apk_entries = [info for info in z_bundle.infolist() if info.filename.lower().endswith(".apk") and not info.is_dir()]
-                if not apk_entries:
-                    return {
-                        "package": None,
-                        "version_name": None,
-                        "version_code": None,
-                        "min_sdk": None,
-                        "target_sdk": None,
-                        "label": None,
-                        "cert_sha256": None,
-                        "cert_sha1": None,
-                        "subject_dn": None,
-                        "signer_source": None,
-                        "file_sha256": file_sha256,
-                        "size_bytes": file_size,
-                        "checked_at": checked_at,
-                        "is_bundle": True,
-                        "bundle_rule_en": "no APK entry found in bundle",
-                        "bundle_rule_ar": "لم يتم العثور على ملفات APK داخل الحزمة",
-                        "filename": os.path.basename(file_path)
-                    }
-                
-                chosen_entry = None
-                # Rule 1: manifest.json package match
-                if "manifest.json" in z_bundle.namelist():
-                    try:
-                        m_data = json.loads(z_bundle.read("manifest.json").decode("utf-8", errors="ignore"))
-                        pkg_name = m_data.get("package_name")
-                        if pkg_name:
-                            for e in apk_entries:
-                                e_base = os.path.basename(e.filename).lower()
-                                if e_base == f"{pkg_name.lower()}.apk":
-                                    chosen_entry = e
-                                    bundle_rule_en = "manifest package match"
-                                    bundle_rule_ar = "مطابقة اسم الحزمة"
-                                    break
-                    except Exception:
-                        pass
-                
-                # Rule 2: base.apk
-                if not chosen_entry:
-                    for e in apk_entries:
-                        e_base = os.path.basename(e.filename).lower()
-                        if e_base in ("base.apk", "base-master.apk"):
-                            chosen_entry = e
-                            bundle_rule_en = f"base APK ({e_base})"
-                            bundle_rule_ar = f"ملف الحزمة الأساسي ({e_base})"
-                            break
-                            
-                # Rule 3: largest *.apk entry
-                if not chosen_entry:
-                    chosen_entry = max(apk_entries, key=lambda e: e.file_size)
-                    e_base = os.path.basename(chosen_entry.filename)
-                    bundle_rule_en = f"largest APK entry ({e_base})"
-                    bundle_rule_ar = f"الملف الأكبر ({e_base})"
-                    
-                tmp_dir = cfg.DOWNLOAD_DIR if os.path.exists(cfg.DOWNLOAD_DIR) else (os.path.dirname(file_path) or os.getcwd())
-                temp_extracted_apk = os.path.join(tmp_dir, f"_temp_inspect_{os.getpid()}_{int(time.time()*1000)}.apk")
-                with z_bundle.open(chosen_entry) as src, open(temp_extracted_apk, "wb") as dst:
-                    shutil.copyfileobj(src, dst, length=1024 * 1024)
-                target_apk_path = temp_extracted_apk
-                base_apk_entry_name = chosen_entry.filename
-                base_apk_size = os.path.getsize(temp_extracted_apk)
-                base_apk_sha256 = compute_file_sha256(temp_extracted_apk)
-        except Exception:
-            return None
-
-    manifest_info = {
-        "package": None,
-        "version_name": None,
-        "version_code": None,
-        "min_sdk": None,
-        "target_sdk": None,
-        "label": None,
-    }
-    cert = None
-    signer_source = None
-    
-    try:
-        try:
-            with zipfile.ZipFile(target_apk_path, "r") as z:
-                if "AndroidManifest.xml" in z.namelist():
-                    raw_axml = z.read("AndroidManifest.xml")
-                    manifest_info = parse_axml(raw_axml)
-                
-                # Try v1 signature
-                cert = extract_v1_cert(z)
-                if cert:
-                    signer_source = "v1"
-        except Exception:
-            pass
-            
-        # If no v1 cert, try APK signing block (v2/v3)
-        if not cert:
-            cert = extract_v2_v3_cert(target_apk_path)
-            if cert:
-                signer_source = "v2/v3"
-    finally:
-        if temp_extracted_apk and os.path.exists(temp_extracted_apk):
-            try:
-                os.remove(temp_extracted_apk)
-            except Exception:
-                pass
-
-    cert_sha256 = None
-    cert_sha1 = None
-    subject_dn = None
-    if cert:
-        try:
-            cert_sha256 = cert.fingerprint(hashes.SHA256()).hex().upper()
-            cert_sha1 = cert.fingerprint(hashes.SHA1()).hex().upper()
-            subject_dn = format_dn(cert.subject)
-        except Exception:
-            pass
-
-    return {
-        "package": manifest_info.get("package"),
-        "version_name": manifest_info.get("version_name"),
-        "version_code": manifest_info.get("version_code"),
-        "min_sdk": manifest_info.get("min_sdk"),
-        "target_sdk": manifest_info.get("target_sdk"),
-        "label": manifest_info.get("label"),
-        "cert_sha256": cert_sha256,
-        "cert_sha1": cert_sha1,
-        "subject_dn": subject_dn,
-        "signer_source": signer_source,
-        "file_sha256": file_sha256,
-        "size_bytes": file_size,
-        "checked_at": checked_at,
-        "is_bundle": is_bundle,
-        "bundle_rule_en": bundle_rule_en,
-        "bundle_rule_ar": bundle_rule_ar,
-        "base_apk_entry_name": base_apk_entry_name,
-        "base_apk_size": base_apk_size,
-        "base_apk_sha256": base_apk_sha256,
-        "filename": os.path.basename(file_path)
-    }
-
-def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") -> str:
-    if not info:
-        return ""
-
-    lines = []
-    lines.append("🛡️ فحص APK / APK Inspection")
-
-    # Bundle line
-    if info.get("is_bundle"):
-        rule = info.get("bundle_rule_ar") if lang == "ar" else info.get("bundle_rule_en")
-        if lang == "ar":
-            lines.append(f"📦 الحزمة: تم فحص APK الأساسي ({rule})")
-        else:
-            lines.append(f"📦 Bundle: base APK inspected ({rule})")
-
-    # Package
-    package = info.get("package")
-    if package:
-        if lang == "ar":
-            lines.append(f"📦 الباكدج: <code>{html.escape(package)}</code>")
-        else:
-            lines.append(f"📦 Package: <code>{html.escape(package)}</code>")
-
-    # Version
-    vname = info.get("version_name")
-    vcode = info.get("version_code")
-    if vname and vcode is not None:
-        vdisp = f"{vname} ({vcode})"
-    elif vname:
-        vdisp = str(vname)
-    elif vcode is not None:
-        vdisp = str(vcode)
-    else:
-        vdisp = None
-
-    if vdisp:
-        if lang == "ar":
-            lines.append(f"🔢 الإصدار: <code>{html.escape(vdisp)}</code>")
-        else:
-            lines.append(f"🔢 Version: <code>{html.escape(vdisp)}</code>")
-
-    # Size & File Hash:
-    is_bundle = info.get("is_bundle", False)
-    if is_bundle:
-        size = info.get("size_bytes")
-        file_sha256 = info.get("file_sha256")
-        base_size = info.get("base_apk_size")
-        base_sha256 = info.get("base_apk_sha256")
-        base_entry = info.get("base_apk_entry_name")
-
-        if size is not None:
-            if lang == "ar":
-                lines.append(f"📊 حجم الحزمة (Bundle): <code>{humanbytes(size)} ({size} B)</code>")
-            else:
-                lines.append(f"📊 Delivered Bundle Size: <code>{humanbytes(size)} ({size} B)</code>")
-        if file_sha256:
-            if lang == "ar":
-                lines.append("🔑 بصمة الحزمة SHA-256:")
-            else:
-                lines.append("🔑 Delivered Bundle SHA-256:")
-            lines.append(f"<code>{file_sha256}</code>")
-        if base_entry:
-            if lang == "ar":
-                lines.append(f"📁 ملف APK الأساسي: <code>{html.escape(base_entry)}</code>")
-            else:
-                lines.append(f"📁 Base APK Entry: <code>{html.escape(base_entry)}</code>")
-        if base_size is not None:
-            if lang == "ar":
-                lines.append(f"📊 حجم APK الأساسي: <code>{humanbytes(base_size)} ({base_size} B)</code>")
-            else:
-                lines.append(f"📊 Base APK Size: <code>{humanbytes(base_size)} ({base_size} B)</code>")
-        if base_sha256:
-            if lang == "ar":
-                lines.append("🔑 بصمة APK الأساسي SHA-256:")
-            else:
-                lines.append("🔑 Base APK SHA-256:")
-            lines.append(f"<code>{base_sha256}</code>")
-    else:
-        # Standard APK
-        size = info.get("size_bytes")
-        if size is not None:
-            if lang == "ar":
-                lines.append(f"📊 الحجم: <code>{humanbytes(size)} ({size} B)</code>")
-            else:
-                lines.append(f"📊 Size: <code>{humanbytes(size)} ({size} B)</code>")
-
-        file_sha256 = info.get("file_sha256")
-        if file_sha256:
-            if lang == "ar":
-                lines.append("🔑 بصمة الملف SHA-256:")
-            else:
-                lines.append("🔑 File SHA-256:")
-            lines.append(f"<code>{file_sha256}</code>")
-
-    # Android SDK
-    min_sdk = info.get("min_sdk")
-    target_sdk = info.get("target_sdk")
-    if min_sdk is not None and target_sdk is not None:
-        sdk_disp = f"minSdk {min_sdk} / target {target_sdk}"
-    elif min_sdk is not None:
-        sdk_disp = f"minSdk {min_sdk}"
-    elif target_sdk is not None:
-        sdk_disp = f"target {target_sdk}"
-    else:
-        sdk_disp = None
-
-    if sdk_disp:
-        if lang == "ar":
-            lines.append(f"🤖 أندرويد: <code>{html.escape(sdk_disp)}</code>")
-        else:
-            lines.append(f"🤖 Android: <code>{html.escape(sdk_disp)}</code>")
-
-    # Optional App Label
-    label = info.get("label")
-    if label:
-        esc_label = html.escape(str(label))
-        if lang == "ar":
-            lines.append(f"📱 التطبيق: <code>{esc_label}</code>")
-        else:
-            lines.append(f"📱 App: <code>{esc_label}</code>")
-
-    # Signer block
-    cert_sha256 = info.get("cert_sha256")
-    subject_dn = info.get("subject_dn")
-    if not cert_sha256 and not subject_dn:
-        if lang == "ar":
-            lines.append("✍️ الموقّع: <code>لم يتم العثور على شهادة توقيع</code>")
-        else:
-            lines.append("✍️ Signer: <code>No signing certificate found</code>")
-    else:
-        esc_dn = html.escape(str(subject_dn or "Unknown"))
-        if lang == "ar":
-            lines.append(f"✍️ الموقّع: <code>{esc_dn}</code>")
-            lines.append("🖋️ بصمة الشهادة SHA-256:")
-            lines.append(f"<code>{cert_sha256}</code>")
-        else:
-            lines.append(f"✍️ Signer: <code>{esc_dn}</code>")
-            lines.append("🖋️ Cert SHA-256:")
-            lines.append(f"<code>{cert_sha256}</code>")
-
-        # Signer consistency check (only if prev exists with a different version_code)
-        if prev and prev.get("cert_sha256"):
-            prev_v = prev.get("version_name") or prev.get("version_code") or "?"
-            if prev["cert_sha256"] == cert_sha256:
-                if lang == "ar":
-                    lines.append(f"✅ نفس الموقّع مثل الإصدار v{prev_v}")
-                else:
-                    lines.append(f"✅ Same signer as v{prev_v}")
-            else:
-                if lang == "ar":
-                    lines.append(f"⚠️ موقّع مختلف عن الإصدار v{prev_v} \u2014 تم تغيير التوقيع (لن يتم تثبيت التحديثات فوق الإصدار القديم)")
-                else:
-                    lines.append(f"⚠️ DIFFERENT signer than v{prev_v} \u2014 signature changed (updates will NOT install over the old version)")
-
-    # Time
-    checked_at = info.get("checked_at", time.time())
-    cairo_time_str = format_cairo_time(checked_at)
-    if lang == "ar":
-        lines.append(f"🕒 وقت الفحص: <code>{cairo_time_str}</code>")
-    else:
-        lines.append(f"🕒 Checked At: <code>{cairo_time_str}</code>")
-
-    return "\n".join(lines)
-
-def format_signer_change_warning(info: dict, prev: dict | None) -> str | None:
-    if not info or not prev:
-        return None
-    curr_cert = info.get("cert_sha256")
-    prev_cert = prev.get("cert_sha256")
-    if not curr_cert or not prev_cert:
-        return None
-    if curr_cert == prev_cert or str(curr_cert).strip().upper() == str(prev_cert).strip().upper():
-        return None
-
-    package = info.get("package") or prev.get("package") or "Unknown"
-    prev_vc = prev.get("version_code")
-    curr_vc = info.get("version_code")
-
-    prev_vc_str = str(prev_vc) if prev_vc is not None else "?"
-    curr_vc_str = str(curr_vc) if curr_vc is not None else "?"
-
-    return (
-        "⚠️ تنبيه: توقيع النسخة دي مختلف عن النسخة اللي فاتت من نفس التطبيق / Warning: this version is signed differently from the previous version of this app\n"
-        f"{package} ({prev_vc_str} → {curr_vc_str})"
-    )
-
-def format_blitzverify_block(info: dict) -> str:
-    if not info:
-        return ""
-
-    def is_valid_val(val):
-        if val is None:
-            return False
-        s = str(val).strip()
-        if not s or s.lower() in ("unknown", "-", "n/a", "none"):
-            return False
-        return True
-
-    lines = ["BLITZVERIFY v1"]
-
-    # 1. package
-    pkg = info.get("package")
-    if is_valid_val(pkg):
-        lines.append(f"package: {str(pkg).strip()}")
-
-    # 2. version_name
-    vname = info.get("version_name")
-    if is_valid_val(vname):
-        lines.append(f"version_name: {str(vname).strip()}")
-
-    # 3. version_code
-    vcode = info.get("version_code")
-    if is_valid_val(vcode):
-        try:
-            lines.append(f"version_code: {int(vcode)}")
-        except (ValueError, TypeError):
-            pass
-
-    # 4. size_bytes
-    size_bytes = info.get("size_bytes")
-    if is_valid_val(size_bytes):
-        try:
-            lines.append(f"size_bytes: {int(size_bytes)}")
-        except (ValueError, TypeError):
-            pass
-
-    # 5. min_sdk
-    min_sdk = info.get("min_sdk")
-    if is_valid_val(min_sdk):
-        try:
-            lines.append(f"min_sdk: {int(min_sdk)}")
-        except (ValueError, TypeError):
-            pass
-
-    # 6. target_sdk
-    target_sdk = info.get("target_sdk")
-    if is_valid_val(target_sdk):
-        try:
-            lines.append(f"target_sdk: {int(target_sdk)}")
-        except (ValueError, TypeError):
-            pass
-
-    # 7. file_sha256
-    file_sha256 = info.get("file_sha256")
-    if is_valid_val(file_sha256):
-        f_sha = str(file_sha256).strip().replace(":", "").lower()
-        if f_sha and f_sha not in ("unknown", "-", "n/a", "none"):
-            lines.append(f"file_sha256: {f_sha}")
-
-    # 8. cert_sha256
-    cert_sha256 = info.get("cert_sha256")
-    if is_valid_val(cert_sha256):
-        c_sha = str(cert_sha256).strip().replace(":", "").lower()
-        if c_sha and c_sha not in ("unknown", "-", "n/a", "none"):
-            lines.append(f"cert_sha256: {c_sha}")
-
-    # 9. inspected_at
-    checked_at = info.get("checked_at")
-    if is_valid_val(checked_at):
-        try:
-            epoch = float(checked_at)
-            try:
-                tz = ZoneInfo("Africa/Cairo")
-            except Exception:
-                tz = datetime.timezone(datetime.timedelta(hours=3))
-            dt = datetime.datetime.fromtimestamp(epoch, tz=tz)
-            lines.append(f"inspected_at: {dt.strftime('%Y-%m-%d %H:%M')}")
-        except Exception:
-            pass
-
-    content = "\n".join(lines)
-    return f"```\n{content}\n```"
 
 def format_fwdcache_note(filename: str, total_size: int, created_at: int) -> str:
     try:
@@ -1869,178 +870,6 @@ def is_message_not_found_error(exc: BaseException | None) -> bool:
         return True
     return False
 
-def format_duplicate_warning_card(info: dict, prev: dict, lang: str = "ar") -> str:
-    lines = []
-    if lang == "ar":
-        lines.append("⚠️ <b>تنبيه: تم تنزيل هذا التطبيق مسبقاً بنفس الإصدار!</b>")
-    else:
-        lines.append("⚠️ <b>Warning: Duplicate APK Download Detected!</b>")
-
-    pkg = info.get("package") or "Unknown"
-    vname = info.get("version_name") or ""
-    vcode = info.get("version_code")
-    vdisp = f"{vname} ({vcode})" if (vname and vcode is not None) else (str(vname or vcode or "Unknown"))
-    size = info.get("size_bytes") or 0
-
-    if lang == "ar":
-        lines.append(f"📦 الباكدج: <code>{html.escape(pkg)}</code>")
-        lines.append(f"🔢 الإصدار: <code>{html.escape(vdisp)}</code>")
-        lines.append(f"📊 الحجم: <code>{humanbytes(size)} ({size} B)</code>")
-        lines.append("")
-        lines.append("📜 <b>بيانات التنزيل السابق المسجل:</b>")
-        if prev.get("checked_at"):
-            lines.append(f"🕒 تاريخ التنزيل: <code>{format_cairo_time(prev['checked_at'])}</code>")
-        if prev.get("file_sha256"):
-            lines.append(f"🔑 بصمة الملف: <code>{prev['file_sha256'][:12]}...</code>")
-    else:
-        lines.append(f"📦 Package: <code>{html.escape(pkg)}</code>")
-        lines.append(f"🔢 Version: <code>{html.escape(vdisp)}</code>")
-        lines.append(f"📊 Size: <code>{humanbytes(size)} ({size} B)</code>")
-        lines.append("")
-        lines.append("📜 <b>Previous Recorded Download:</b>")
-        if prev.get("checked_at"):
-            lines.append(f"🕒 Date: <code>{format_cairo_time(prev['checked_at'])}</code>")
-        if prev.get("file_sha256"):
-            lines.append(f"🔑 File SHA-256: <code>{prev['file_sha256'][:12]}...</code>")
-
-    curr_cert = info.get("cert_sha256")
-    prev_cert = prev.get("cert_sha256")
-    if curr_cert and prev_cert:
-        if curr_cert == prev_cert:
-            lines.append("✍️ التوقيع: ✅ نفس شهادة التوقيع الأصلية" if lang == "ar" else "✍️ Signer: ✅ Same original signing certificate")
-        else:
-            lines.append("✍️ التوقيع: ⚠️ شهادة توقيع مختلفة تماماً!" if lang == "ar" else "✍️ Signer: ⚠️ DIFFERENT signing certificate!")
-
-    lines.append("")
-    if lang == "ar":
-        lines.append("💡 <b>هل ترغب في تنزيله ورفعه إلى تليجرام مجدداً؟</b>")
-    else:
-        lines.append("💡 <b>Do you want to download and upload it to Telegram again?</b>")
-    return "\n".join(lines)
-
-def make_duplicate_keyboard(pending_id: int, lang: str = "ar") -> InlineKeyboardMarkup:
-    btn_go = "✅ نزّله تاني" if lang == "ar" else "✅ Download anyway"
-    btn_no = "🛑 إلغاء" if lang == "ar" else "🛑 Cancel"
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(btn_go, callback_data=f"dup_go_{pending_id}"),
-            InlineKeyboardButton(btn_no, callback_data=f"dup_no_{pending_id}")
-        ]
-    ])
-
-async def handle_apk_inspection_card(file_path: str, filename: str, user_id: int, user_msg: Message, lang: str = "ar", precomputed_info: dict | None = None):
-    try:
-        lower_name = (filename or "").lower()
-        if not lower_name.endswith((".apk", ".xapk", ".apks")):
-            return
-        if not file_path or not os.path.exists(file_path):
-            return
-
-        if precomputed_info:
-            info = precomputed_info
-        else:
-            loop = asyncio.get_running_loop()
-            info = await loop.run_in_executor(None, inspect_apk, file_path)
-        if not info:
-            return
-
-        package = info.get("package")
-        vcode = info.get("version_code")
-        cert_sha256 = info.get("cert_sha256")
-
-        # Get previous inspection for different version_code BEFORE recording new one
-        prev = db_get_last_inspection_for_package(package, exclude_latest=True, exclude_version_code=vcode) if package else None
-
-        # Record in DB
-        db_add_apk_inspection(
-            user_id=user_id,
-            package=package,
-            version_name=info.get("version_name"),
-            version_code=vcode,
-            file_sha256=info.get("file_sha256"),
-            cert_sha256=cert_sha256,
-            size=info.get("size_bytes"),
-            filename=filename,
-            checked_at=info.get("checked_at"),
-            min_sdk=info.get("min_sdk"),
-            target_sdk=info.get("target_sdk")
-        )
-
-        warn_text = format_signer_change_warning(info, prev)
-        if warn_text:
-            try:
-                await user_msg.reply_text(warn_text, parse_mode=ParseMode.DISABLED)
-            except Exception as e_warn:
-                logger.error(f"Signer change warning send failed: {e_warn}", exc_info=True)
-
-        try:
-            block_text = format_blitzverify_block(info)
-            if block_text:
-                await user_msg.reply_text(block_text, parse_mode=ParseMode.MARKDOWN)
-        except Exception as e_block:
-            logger.error(f"BLITZVERIFY block send failed: {e_block}", exc_info=True)
-    except Exception as e:
-        logger.error(f"APK inspection card failed silently: {e}", exc_info=True)
-
-async def run_approved_pending_upload(pending_id: int, original_msg: Message):
-    row = db_get_pending_download(pending_id)
-    if not row:
-        return
-    fpath = row["file_path"]
-    fname = row["filename"]
-    uid = row["user_id"]
-    custom_caption = row.get("custom_caption", "")
-    settings = db_get_user_settings(uid)
-    lang = settings["lang"]
-
-    if not fpath or not os.path.exists(fpath):
-        db_update_pending_status(pending_id, "expired")
-        await original_msg.reply_text(tr(lang, "dup_file_missing_alert"), parse_mode=ParseMode.HTML)
-        return
-
-    fsize = os.path.getsize(fpath)
-    precomputed = None
-    if row.get("inspection_json"):
-        try:
-            precomputed = json.loads(row["inspection_json"])
-        except Exception:
-            pass
-
-    url_key = row.get("url_key", "")
-    if not url_key and precomputed and isinstance(precomputed, dict):
-        url_key = precomputed.get("url_key", "")
-
-    status_msg = await original_msg.reply_text(
-        f"📤 <b>{tr(lang, 'uploading')}</b>",
-        parse_mode=ParseMode.HTML
-    )
-    task_id = f"task_{int(time.time() * 1000)}"
-    state.ACTIVE_TASKS[task_id] = {"cancelled": False}
-    start_time = time.time()
-
-    try:
-        await process_single_local_file_upload(
-            file_path=fpath,
-            filename=fname,
-            actual_file_size=fsize,
-            status_msg=status_msg,
-            user_msg=original_msg,
-            user_id=uid,
-            start_time=start_time,
-            task_id=task_id,
-            custom_caption=custom_caption,
-            skip_dup_check=True,
-            precomputed_apk_info=precomputed,
-            pending_id=pending_id,
-            url_key=url_key
-        )
-    except Exception as e:
-        logger.error(f"Error uploading approved pending download {pending_id}: {e}", exc_info=True)
-        try:
-            await safe_edit_text(status_msg, f"❌ <b>Upload Error:</b> <code>{html.escape(str(e))}</code>", parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
-
 # ==========================================
 # 9. معالجات الرسائل والأوامر المزدوجة
 # ==========================================
@@ -2057,10 +886,10 @@ async def start_handler(client: Client, message: Message):
     
     welcome_text = tr(st["lang"], "welcome", name=sender)
     try:
-        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin_user), parse_mode=ParseMode.HTML)
+        await message.reply_text(welcome_text, reply_markup=keyboards.make_start_keyboard(st["lang"], is_admin=is_admin_user), parse_mode=ParseMode.HTML)
     except FloodWait as e:
         await asyncio.sleep(e.value + 1)
-        await message.reply_text(welcome_text, reply_markup=make_start_keyboard(st["lang"], is_admin=is_admin_user), parse_mode=ParseMode.HTML)
+        await message.reply_text(welcome_text, reply_markup=keyboards.make_start_keyboard(st["lang"], is_admin=is_admin_user), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("god") | filters.command("godmode") | filters.command("omnipotent"))
 async def god_panel_handler(client: Client, message: Message):
@@ -2072,10 +901,10 @@ async def god_panel_handler(client: Client, message: Message):
     
     god_card = tr(st["lang"], "god_panel", threads=st['god_threads'], files=g_stats['files'], bytes=humanbytes(g_stats['bytes']))
     try:
-        await message.reply_text(god_card, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+        await message.reply_text(god_card, reply_markup=keyboards.make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
     except FloodWait as e:
         await asyncio.sleep(e.value + 1)
-        await message.reply_text(god_card, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+        await message.reply_text(god_card, reply_markup=keyboards.make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("probe"))
 async def probe_command_handler(client: Client, message: Message):
@@ -2163,7 +992,7 @@ async def settings_command_handler(client: Client, message: Message):
     st = db_get_user_settings(user_id)
     await message.reply_text(
         tr(st["lang"], "settings_title"),
-        reply_markup=make_settings_keyboard(user_id),
+        reply_markup=keyboards.make_settings_keyboard(user_id),
         parse_mode=ParseMode.HTML
     )
 
@@ -2173,7 +1002,7 @@ async def help_command_handler(client: Client, message: Message):
     if not is_admin(user_id):
         return
     st = db_get_user_settings(user_id)
-    await message.reply_text(tr(st["lang"], "help_text"), reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+    await message.reply_text(tr(st["lang"], "help_text"), reply_markup=keyboards.make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("stats"))
 async def stats_command_handler(client: Client, message: Message):
@@ -2192,7 +1021,7 @@ async def stats_command_handler(client: Client, message: Message):
         f"📊 <b>Total Bytes:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
         f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>"
     )
-    await message.reply_text(stats_text, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+    await message.reply_text(stats_text, reply_markup=keyboards.make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("history"))
 async def history_command_handler(client: Client, message: Message):
@@ -2211,7 +1040,7 @@ async def history_command_handler(client: Client, message: Message):
             text += f"{i}. 📄 <code>{fname}</code>\n   🏷️ {fcat} | 📊 {humanbytes(fsize)} | ⏱️ {t_str}\n\n"
         text = text.rstrip()
 
-    await message.reply_text(text, reply_markup=make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
+    await message.reply_text(text, reply_markup=keyboards.make_back_keyboard(st["lang"]), parse_mode=ParseMode.HTML)
 
 @bot.on_message(filters.command("broadcast"))
 async def broadcast_command_handler(client: Client, message: Message):
@@ -2391,7 +1220,7 @@ async def brand_command_handler(client: Client, message: Message):
             f"🔘 <b>الزر التفاعلي:</b> <code>مفعل ✅</code>\n"
             f"📝 <b>الكابشن:</b> <code>مفعل ✅</code>\n\n"
             f"💡 لإدارة الخيارات: <code>/brand</code>",
-            reply_markup=make_brand_keyboard(user_id),
+            reply_markup=keyboards.make_brand_keyboard(user_id),
             parse_mode=ParseMode.HTML
         )
         return
@@ -2403,7 +1232,7 @@ async def brand_command_handler(client: Client, message: Message):
         f"📢 <b>القناة الحالية:</b> <code>{cur_brand}</code>\n\n"
         f"💡 <b>التعيين:</b> <code>/brand @اسم_قناتك</code>\n"
         f"💡 <b>الحذف:</b> <code>/clear_brand</code>",
-        reply_markup=make_brand_keyboard(user_id),
+        reply_markup=keyboards.make_brand_keyboard(user_id),
         parse_mode=ParseMode.HTML
     )
 
@@ -2475,7 +1304,7 @@ async def handle_url_intake(
                         "min_sdk": insp.get("min_sdk"),
                         "target_sdk": insp.get("target_sdk")
                     }
-                    block_text = format_blitzverify_block(insp_info)
+                    block_text = apk_inspect.format_blitzverify_block(insp_info)
                     if block_text:
                         await user_msg.reply_text(block_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -2560,7 +1389,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.message.edit_reply_markup(reply_markup=None)
             except Exception:
                 pass
-            asyncio.create_task(run_approved_pending_upload(pending_id, query.message))
+            asyncio.create_task(upload.run_approved_pending_upload(pending_id, query.message))
             return
 
         if data.startswith("dup_no_"):
@@ -2620,14 +1449,14 @@ async def callback_handler(client: Client, query: CallbackQuery):
         if data == "toggle_lang":
             new_lang = "en" if lang == "ar" else "ar"
             db_update_user_setting(user_id, "lang", new_lang)
-            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_settings_keyboard(user_id))
             await query.answer("Language updated! / تم تغيير اللغة!", show_alert=True)
             return
 
         elif data == "toggle_mode":
             new_mode = "doc" if st["upload_mode"] == "auto" else "auto"
             db_update_user_setting(user_id, "upload_mode", new_mode)
-            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_settings_keyboard(user_id))
             await query.answer("Upload mode toggled!")
             return
 
@@ -2636,28 +1465,28 @@ async def callback_handler(client: Client, query: CallbackQuery):
             curr_idx = thread_modes.index(st["god_threads"]) if st["god_threads"] in thread_modes else 0
             new_threads = thread_modes[(curr_idx + 1) % len(thread_modes)]
             db_update_user_setting(user_id, "god_threads", new_threads)
-            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_settings_keyboard(user_id))
             await query.answer(f"Threads updated to {new_threads}x!")
             return
 
         elif data == "toggle_caption":
             new_val = 0 if st.get("enable_caption", 1) else 1
             db_update_user_setting(user_id, "enable_caption", new_val)
-            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_settings_keyboard(user_id))
             await query.answer("Caption preference updated!")
             return
 
         elif data == "toggle_thumbs":
             new_val = 0 if st.get("enable_thumbs", 1) else 1
             db_update_user_setting(user_id, "enable_thumbs", new_val)
-            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_settings_keyboard(user_id))
             await query.answer("Thumbnail preference updated!")
             return
 
         elif data == "toggle_cleantags":
             new_val = 0 if st.get("clean_tags", 1) else 1
             db_update_user_setting(user_id, "clean_tags", new_val)
-            await query.message.edit_reply_markup(reply_markup=make_settings_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_settings_keyboard(user_id))
             await query.answer("Tag cleaner updated / تم تحديث تفضيل تنظيف الوسوم!")
             return
 
@@ -2669,7 +1498,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 f"📢 <b>القناة الحالية:</b> <code>{cur_brand}</code>\n\n"
                 f"💡 <b>التعيين:</b> <code>/brand @اسم_قناتك</code>\n"
                 f"💡 <b>الحذف:</b> <code>/clear_brand</code>",
-                reply_markup=make_brand_keyboard(user_id),
+                reply_markup=keyboards.make_brand_keyboard(user_id),
                 parse_mode=ParseMode.HTML
             )
             return
@@ -2683,27 +1512,27 @@ async def callback_handler(client: Client, query: CallbackQuery):
             cur_pos = st.get("brand_position", "suffix")
             new_pos = pos_modes[(pos_modes.index(cur_pos) + 1) % len(pos_modes)] if cur_pos in pos_modes else "suffix"
             db_update_user_setting(user_id, "brand_position", new_pos)
-            await query.message.edit_reply_markup(reply_markup=make_brand_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_brand_keyboard(user_id))
             await query.answer(f"تم تغيير موضع الاسم إلى: {new_pos}!")
             return
 
         elif data == "toggle_brand_btn":
             new_val = 0 if st.get("channel_button", 1) else 1
             db_update_user_setting(user_id, "channel_button", new_val)
-            await query.message.edit_reply_markup(reply_markup=make_brand_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_brand_keyboard(user_id))
             await query.answer("تم تحديث حالة زر القناة التفاعلي!")
             return
 
         elif data == "btn_clear_brand":
             db_update_user_setting(user_id, "channel_tag", "")
-            await query.message.edit_reply_markup(reply_markup=make_brand_keyboard(user_id))
+            await query.message.edit_reply_markup(reply_markup=keyboards.make_brand_keyboard(user_id))
             await query.answer("تم حذف وسم القناة!", show_alert=True)
             return
 
         elif data == "btn_settings":
             await query.message.edit_text(
                 tr(st["lang"], "settings_title"),
-                reply_markup=make_settings_keyboard(user_id),
+                reply_markup=keyboards.make_settings_keyboard(user_id),
                 parse_mode=ParseMode.HTML
             )
             return
@@ -2711,7 +1540,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
         if data == "btn_start":
             sender = query.from_user.first_name if query.from_user else 'Master'
             is_admin_user = is_admin(user_id)
-            await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=make_start_keyboard(lang, is_admin=is_admin_user), parse_mode=ParseMode.HTML)
+            await query.message.edit_text(tr(lang, "welcome", name=sender), reply_markup=keyboards.make_start_keyboard(lang, is_admin=is_admin_user), parse_mode=ParseMode.HTML)
 
         elif data == "btn_admin_panel":
             if not is_admin(user_id):
@@ -2737,20 +1566,20 @@ async def callback_handler(client: Client, query: CallbackQuery):
         elif data == "btn_god_panel":
             g_stats = db_get_global_stats()
             god_card = tr(lang, "god_panel", threads=st['god_threads'], files=g_stats['files'], bytes=humanbytes(g_stats['bytes']))
-            await query.message.edit_text(god_card, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+            await query.message.edit_text(god_card, reply_markup=keyboards.make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
         elif data == "btn_probe_info":
-            await query.message.edit_text(tr(lang, "probe_info"), reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+            await query.message.edit_text(tr(lang, "probe_info"), reply_markup=keyboards.make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
         elif data == "btn_settings":
             await query.message.edit_text(
                 tr(lang, "settings_title"),
-                reply_markup=make_settings_keyboard(user_id),
+                reply_markup=keyboards.make_settings_keyboard(user_id),
                 parse_mode=ParseMode.HTML
             )
         
         elif data == "btn_help":
-            await query.message.edit_text(tr(lang, "help_text"), reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+            await query.message.edit_text(tr(lang, "help_text"), reply_markup=keyboards.make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
         elif data == "btn_history":
             history_list = db_get_history(user_id, limit=10)
@@ -2762,7 +1591,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                     t_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(fts))
                     text += f"{i}. 📄 <code>{fname}</code>\n   🏷️ {fcat} | 📊 {humanbytes(fsize)} | ⏱️ {t_str}\n\n"
                 text = text.rstrip()
-            await query.message.edit_text(text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+            await query.message.edit_text(text, reply_markup=keyboards.make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
         elif data == "btn_stats":
             g_stats = db_get_global_stats()
@@ -2775,7 +1604,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 f"📊 <b>Total Bytes:</b> <code>{humanbytes(g_stats['bytes'])}</code>\n"
                 f"⏳ <b>Queue Size:</b> <code>{queue_size}</code>"
             )
-            await query.message.edit_text(stats_text, reply_markup=make_back_keyboard(lang), parse_mode=ParseMode.HTML)
+            await query.message.edit_text(stats_text, reply_markup=keyboards.make_back_keyboard(lang), parse_mode=ParseMode.HTML)
 
         await query.answer()
     except MessageNotModified:
@@ -2917,17 +1746,17 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
     lang = st["lang"]
 
     if not TORRENTP_AVAILABLE:
-        await safe_edit_text(status_msg, "❌ <b>Torrent engine module missing (torrentp)!</b>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, "❌ <b>Torrent engine module missing (torrentp)!</b>", parse_mode=ParseMode.HTML)
         return
 
     task_id = f"task_{int(time.time() * 1000)}"
     state.ACTIVE_TASKS[task_id] = {"cancelled": False}
     start_time = time.time()
     
-    await safe_edit_text(
+    await keyboards.safe_edit_text(
         status_msg,
         f"🧲 <b>{tr(lang, 'torrent_connecting')}</b>",
-        reply_markup=make_cancel_keyboard(task_id, lang=lang),
+        reply_markup=keyboards.make_cancel_keyboard(task_id, lang=lang),
         parse_mode=ParseMode.HTML
     )
 
@@ -2939,7 +1768,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
             free_mb = f"{free_d / (1024*1024):.1f} MB"
             reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
             err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-            await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+            await keyboards.safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
             return
 
         downloader = TorrentDownloader(torrent_src, save_path=cfg.DOWNLOAD_DIR)
@@ -2949,7 +1778,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
             if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 downloader.stop_download()
                 dl_task.cancel()
-                await safe_edit_text(status_msg, "🛑 <b>Torrent task cancelled!</b>", parse_mode=ParseMode.HTML)
+                await keyboards.safe_edit_text(status_msg, "🛑 <b>Torrent task cancelled!</b>", parse_mode=ParseMode.HTML)
                 return
             await asyncio.sleep(2.0)
 
@@ -2963,309 +1792,19 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
                     downloaded_items.append(fpath)
 
         if not downloaded_items:
-            await safe_edit_text(status_msg, "❌ <b>No downloaded files found from Torrent!</b>", parse_mode=ParseMode.HTML)
+            await keyboards.safe_edit_text(status_msg, "❌ <b>No downloaded files found from Torrent!</b>", parse_mode=ParseMode.HTML)
             return
 
         for fpath in downloaded_items:
             fname = os.path.basename(fpath)
             fsize = os.path.getsize(fpath)
-            await process_single_local_file_upload(fpath, fname, fsize, status_msg, user_msg, user_id, start_time, task_id, url_key=torrent_src)
+            await upload.process_single_local_file_upload(fpath, fname, fsize, status_msg, user_msg, user_id, start_time, task_id, url_key=torrent_src)
 
     except Exception as e:
-        await safe_edit_text(status_msg, f"❌ <b>Torrent Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, f"❌ <b>Torrent Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         state.ACTIVE_TASKS.pop(task_id, None)
         gc.collect()
-
-async def process_single_local_file_upload(
-    file_path: str,
-    filename: str,
-    actual_file_size: int,
-    status_msg: Message,
-    user_msg: Message,
-    user_id: int,
-    start_time: float,
-    task_id: str,
-    custom_caption: str = "",
-    skip_dup_check: bool = False,
-    precomputed_apk_info: dict | None = None,
-    pending_id: int | None = None,
-    url_key: str = ""
-):
-    settings = db_get_user_settings(user_id)
-    lang = settings["lang"]
-    filename = clean_and_rename_filename(filename, user_id=user_id)
-    if task_id in state.ACTIVE_TASKS:
-        state.ACTIVE_TASKS[task_id]["filename"] = filename
-    icon, category_desc, is_video_type = get_god_category(filename)
-    force_video = False if settings["upload_mode"] == "doc" else is_video_type
-
-    # Duplicate check for APK family
-    is_apk_family = (filename or "").lower().endswith((".apk", ".xapk", ".apks"))
-    if is_apk_family and not skip_dup_check:
-        if not precomputed_apk_info:
-            loop = asyncio.get_running_loop()
-            precomputed_apk_info = await loop.run_in_executor(None, inspect_apk, file_path)
-        if precomputed_apk_info:
-            pkg = precomputed_apk_info.get("package")
-            vcode = precomputed_apk_info.get("version_code")
-            if pkg and vcode is not None:
-                dup_record = db_check_apk_duplicate(pkg, vcode)
-                if dup_record:
-                    os.makedirs(cfg.PENDING_DIR, exist_ok=True)
-                    dest_pending_name = f"pending_{int(time.time()*1000)}_{os.path.basename(file_path)}"
-                    dest_pending_path = os.path.join(cfg.PENDING_DIR, dest_pending_name)
-                    shutil.move(file_path, dest_pending_path)
-                    new_pending_id = db_add_pending_download(
-                        user_id=user_id,
-                        chat_id=user_msg.chat.id,
-                        file_path=dest_pending_path,
-                        filename=filename,
-                        custom_caption=custom_caption,
-                        package=pkg,
-                        version_name=str(precomputed_apk_info.get("version_name") or ""),
-                        version_code=vcode,
-                        size=actual_file_size,
-                        status="pending",
-                        inspection_json=json.dumps(precomputed_apk_info),
-                        flow_type="torrent"
-                    )
-                    warn_text = format_duplicate_warning_card(precomputed_apk_info, dup_record, lang=lang)
-                    kb = make_duplicate_keyboard(new_pending_id, lang=lang)
-                    try:
-                        await status_msg.delete()
-                    except Exception:
-                        pass
-                    await user_msg.reply_text(warn_text, reply_markup=kb, parse_mode=ParseMode.HTML)
-                    return
-            else:
-                logger.info(f"APK inspection degraded (pkg={pkg}, vcode={vcode}), proceeding without duplicate warning")
-
-    BOT_LIMIT_BYTES = 1950 * 1024 * 1024
-    SPLIT_CHUNK_BYTES = 1900 * 1024 * 1024
-    uploader = get_uploader_client()
-    is_premium_active = (user_bot is not None) and getattr(user_bot, "is_connected", False) and (uploader == user_bot)
-    CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
-
-    if is_apk_family and not precomputed_apk_info and file_path and os.path.exists(file_path):
-        loop = asyncio.get_running_loop()
-        precomputed_apk_info = await loop.run_in_executor(None, inspect_apk, file_path)
-
-    if actual_file_size > BOT_LIMIT_BYTES:
-        if is_premium_active and actual_file_size <= (3950 * 1024 * 1024):
-            # Premium upload
-            await safe_edit_text(
-                status_msg,
-                f"📤 <b>{'جاري الرفع عبر Telegram Premium...' if lang == 'ar' else f'Uploading {humanbytes(actual_file_size)} via Telegram Premium...'}</b>",
-                parse_mode=ParseMode.HTML
-            )
-            up_start_time = time.time()
-            last_update = [0]
-            
-            async def pyrogram_progress_prem(current, total):
-                if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                    return
-                await progress_bar(
-                    current, total, ("رفع Premium" if lang == "ar" else "Premium upload"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
-                )
-
-            caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
-            target_chat = CHANNEL_ID if CHANNEL_ID else "me"
-            is_vid = is_video_type and settings["upload_mode"] != "doc"
-            thumb_path, duration, width, height = None, 0, 0, 0
-            if is_vid and settings.get("enable_thumbs", 1):
-                thumb_path, duration, width, height = await extract_video_metadata(file_path)
-            sent_msg = None
-            try:
-                try:
-                    sent_msg = await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
-                except Exception as prem_upload_err:
-                    logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
-                    sent_msg = await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
-            finally:
-                if thumb_path and os.path.exists(thumb_path):
-                    try:
-                        os.remove(thumb_path)
-                    except Exception:
-                        pass
-
-            total_time_spent = round(time.time() - start_time)
-            avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
-            db_add_history(user_id, filename, actual_file_size, category_desc)
-            if url_key and sent_msg and hasattr(sent_msg, "id") and isinstance(sent_msg.id, int) and not isinstance(sent_msg.id, bool):
-                deliv_chat = sent_msg.chat.id if hasattr(sent_msg, "chat") and sent_msg.chat else (target_chat if isinstance(target_chat, int) else user_msg.chat.id)
-                apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
-                apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
-                db_record_delivery(user_id, url_key, filename, actual_file_size, deliv_chat, [sent_msg.id], apk_pkg, apk_vc)
-            await status_msg.delete()
-
-            dest_text = f"القناة ({CHANNEL_ID})" if CHANNEL_ID else "الرسائل المحفوظة (Saved Messages)"
-            prem_title = "<b>تم الرفع عبر Telegram Premium</b>" if lang == "ar" else "<b>Uploaded via Telegram Premium</b>"
-            dest_lbl = "مكان الإرسال:" if lang == "ar" else "Destination:"
-            success_card = (
-                f"{prem_title}\n"
-                f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
-                f"{icon} {tr(lang, 'category')} {category_desc}\n"
-                f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
-                f"📍 <b>{dest_lbl}</b> <code>{dest_text}</code>\n"
-                f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
-            )
-            await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
-            await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
-            if pending_id:
-                if file_path and os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                    except Exception:
-                        pass
-                db_update_pending_status(pending_id, "done")
-            return
-        else:
-            # Splitting check
-            ok_split, needed_s, free_s, reserve_s = check_disk_space_for_split(cfg.DOWNLOAD_DIR, SPLIT_CHUNK_BYTES)
-            if not ok_split:
-                logger.error(f"Disk check failed before split: needed={needed_s}, free={free_s}, reserve={reserve_s}")
-                needed_mb = f"{needed_s / (1024*1024):.1f} MB"
-                free_mb = f"{free_s / (1024*1024):.1f} MB"
-                reserve_mb = f"{reserve_s / (1024*1024):.1f} MB"
-                err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
-                return
-
-            num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
-            await safe_edit_text(
-                status_msg,
-                f"✂️ <b>{'تقسيم الملف إلى ' + str(num_parts) + ' أجزاء...' if lang == 'ar' else f'Splitting file into {num_parts} parts...'}</b>",
-                parse_mode=ParseMode.HTML
-            )
-            part_number = 1
-            deliv_part_ids = []
-            ext = os.path.splitext(filename)[1]
-            with open(file_path, "rb") as src_file:
-                while True:
-                    if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                        return
-                    chunk_data = src_file.read(SPLIT_CHUNK_BYTES)
-                    if not chunk_data:
-                        break
-                    part_filename = f"{os.path.splitext(filename)[0]}.part{part_number:03d}{ext}"
-                    part_filepath = os.path.join(cfg.DOWNLOAD_DIR, part_filename)
-                    with open(part_filepath, "wb") as part_file:
-                        part_file.write(chunk_data)
-                    part_msg = await user_msg.reply_document(
-                        document=part_filepath,
-                        caption=f"🧩 <b>Part {part_number}/{num_parts}</b>\n📄 <code>{part_filename}</code>",
-                        parse_mode=ParseMode.HTML
-                    )
-                    if part_msg and hasattr(part_msg, "id") and isinstance(part_msg.id, int) and not isinstance(part_msg.id, bool):
-                        deliv_part_ids.append(part_msg.id)
-                    if os.path.exists(part_filepath):
-                        os.remove(part_filepath)
-                    part_number += 1
-            total_time_spent = round(time.time() - start_time)
-            avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
-            db_add_history(user_id, filename, actual_file_size, category_desc)
-            if url_key and deliv_part_ids:
-                apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
-                apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
-                db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, deliv_part_ids, apk_pkg, apk_vc)
-            await status_msg.delete()
-            task_ssl_unverified = state.ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
-            extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
-            success_card = (
-                f"{tr(lang, 'success_title')}\n"
-                f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
-                f"{icon} {tr(lang, 'category')} {category_desc}\n"
-                f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)} ({num_parts} Parts)</code>\n"
-                f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-                f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
-                f"{extra_ssl_line}"
-            )
-            await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
-            await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
-            if pending_id:
-                if file_path and os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                    except Exception:
-                        pass
-                db_update_pending_status(pending_id, "done")
-            return
-
-    await safe_edit_text(status_msg, f"📤 <b>{tr(lang, 'uploading')}</b>", parse_mode=ParseMode.HTML)
-    up_start_time = time.time()
-    last_update = [0]
-    
-    async def pyrogram_progress(current, total):
-        await progress_bar(current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang)
-
-    caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
-    
-    thumb_path = None
-    duration, width, height = 0, 0, 0
-    if force_video and settings.get("enable_thumbs", 1):
-        thumb_path, duration, width, height = await extract_video_metadata(file_path)
-
-    sent_msg = None
-    try:
-        sent_msg = await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
-        if CHANNEL_ID:
-            try:
-                uploader = get_uploader_client()
-                if force_video:
-                    kwargs = {
-                        "chat_id": CHANNEL_ID,
-                        "video": file_path,
-                        "caption": caption,
-                        "supports_streaming": True,
-                        "parse_mode": ParseMode.HTML,
-                        "reply_markup": brand_markup
-                    }
-                    if thumb_path and os.path.exists(thumb_path): kwargs["thumb"] = thumb_path
-                    if duration > 0: kwargs["duration"] = duration
-                    if width > 0 and height > 0:
-                        kwargs["width"] = width
-                        kwargs["height"] = height
-                    await uploader.send_video(**kwargs)
-                else:
-                    await uploader.send_document(chat_id=CHANNEL_ID, document=file_path, caption=caption, reply_markup=brand_markup, parse_mode=ParseMode.HTML)
-            except Exception as ch_err:
-                logger.warning(f"Channel upload notice: {ch_err}")
-    finally:
-        if thumb_path and os.path.exists(thumb_path):
-            try: os.remove(thumb_path)
-            except Exception: pass
-        
-    total_time_spent = round(time.time() - start_time)
-    avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
-    db_add_history(user_id, filename, actual_file_size, category_desc)
-    if url_key and sent_msg and hasattr(sent_msg, "id") and isinstance(sent_msg.id, int) and not isinstance(sent_msg.id, bool):
-        apk_pkg = precomputed_apk_info.get("package") if (is_apk_family and precomputed_apk_info) else None
-        apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
-        db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, [sent_msg.id], apk_pkg, apk_vc)
-    await status_msg.delete()
-    task_ssl_unverified = state.ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
-    extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
-    
-    success_card = (
-        f"{tr(lang, 'success_title')}\n"
-        f"{tr(lang, 'file_name')} <code>{filename}</code>\n"
-        f"{icon} {tr(lang, 'category')} {category_desc}\n"
-        f"{tr(lang, 'final_size')} <code>{humanbytes(actual_file_size)}</code>\n"
-        f"{tr(lang, 'total_time')} <code>{time_formatter(total_time_spent)}</code>\n"
-        f"{tr(lang, 'avg_speed')} <code>{humanbytes(avg_speed)}/s</code>"
-        f"{extra_ssl_line}"
-    )
-    await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
-    await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
-    if pending_id:
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception:
-                pass
-        db_update_pending_status(pending_id, "done")
 
 async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg: Message):
     zip_filename = f"bundle_{int(time.time())}.zip"
@@ -3281,13 +1820,13 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
         free_mb = f"{free_d / (1024*1024):.1f} MB"
         reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
         err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-        await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
         return
     
     try:
         with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for idx, (raw_url, cname, _) in enumerate(valid_requests, 1):
-                await safe_edit_text(status_msg, f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
+                await keyboards.safe_edit_text(status_msg, f"📦 <b>Downloading file {idx}/{len(valid_requests)} for ZIP bundle...</b>", parse_mode=ParseMode.HTML)
                 direct_url = await unrestrict_direct_link(raw_url)
                 parsed_url = urllib.parse.urlparse(direct_url)
                 referer_header = "https://an1.com/" if ("an1.net" in direct_url or "an1.com" in direct_url) else f"{parsed_url.scheme}://{parsed_url.netloc}/"
@@ -3332,7 +1871,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                                 downloaded_files.append(temp_fpath)
         
         zip_size = os.path.getsize(zip_filepath)
-        await safe_edit_text(status_msg, "📤 <b>ZIP Bundle created! Uploading to Telegram...</b>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, "📤 <b>ZIP Bundle created! Uploading to Telegram...</b>", parse_mode=ParseMode.HTML)
         
         await user_msg.reply_document(
             document=zip_filepath,
@@ -3341,7 +1880,7 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
         )
         await status_msg.delete()
     except Exception as e:
-        await safe_edit_text(status_msg, f"❌ <b>ZIP bundle failed:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, f"❌ <b>ZIP bundle failed:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         for fpath in downloaded_files:
             if os.path.exists(fpath):
@@ -3453,7 +1992,7 @@ async def download_multi_stream_turbo(
                                 in_flight.pop(b_id, None)
                                 status_tracker["downloaded"] += len(block_data)
                                 
-                        await progress_bar(
+                        await keyboards.progress_bar(
                             status_tracker["downloaded"],
                             total_size,
                             (f"تنزيل ({concurrency}x)" if lang == "ar" else f"Downloading ({concurrency}x)"),
@@ -3662,7 +2201,7 @@ async def download_video_or_m3u8(
                         f"🎬 <b>{'تنزيل فيديو' if lang == 'ar' else 'Video stream'} ({num_connections}x)</b>\n"
                         f"📄 <b>{'العنوان' if lang == 'ar' else 'Title'}:</b> <code>{v_title}</code>\n"
                         f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{humanbytes(total_file_size)}</code>",
-                        reply_markup=make_cancel_keyboard(task_id, lang=lang),
+                        reply_markup=keyboards.make_cancel_keyboard(task_id, lang=lang),
                         parse_mode=ParseMode.HTML
                     )
                 except Exception:
@@ -3722,7 +2261,7 @@ async def download_video_or_m3u8(
                 status_tracker["downloaded"] = downloaded
                 status_tracker["total"] = total
                 asyncio.run_coroutine_threadsafe(
-                    progress_bar(
+                    keyboards.progress_bar(
                         downloaded, total, tr(lang, "downloading"),
                         status_msg, dl_start_time, last_update,
                         icon="🎬", task_id=task_id, lang=lang
@@ -3777,202 +2316,6 @@ async def download_video_or_m3u8(
 
     return False, None, None
 
-async def extract_video_metadata(video_path: str):
-    """استخراج أبعاد الفيديو ومدته وتوليد صورة مصغرة (Thumbnail) باستخدام ffmpeg/ffprobe بأمان تام"""
-    thumb_path = None
-    duration = 0
-    width = 0
-    height = 0
-
-    if not video_path or not os.path.exists(video_path):
-        return None, 0, 0, 0
-
-    # 1. محاولة استخراج المدة والأبعاد عبر ffprobe
-    try:
-        probe_cmd = [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration:stream=width,height",
-            "-of", "json", video_path
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *probe_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, _ = await proc.communicate()
-        if proc.returncode == 0 and stdout:
-            info = json.loads(stdout.decode(errors="ignore"))
-            fmt = info.get("format", {})
-            if "duration" in fmt:
-                try:
-                    duration = int(float(fmt["duration"]))
-                except Exception:
-                    pass
-            streams = info.get("streams", [])
-            for s in streams:
-                if "width" in s and "height" in s:
-                    try:
-                        width = int(s["width"])
-                        height = int(s["height"])
-                        break
-                    except Exception:
-                        pass
-    except (FileNotFoundError, Exception) as e:
-        logger.debug(f"ffprobe metadata extraction skipped: {e}")
-
-    # 2. محاولة توليد thumbnail عبر ffmpeg
-    try:
-        base_name, _ = os.path.splitext(video_path)
-        candidate_thumb = f"{base_name}_thumb_{int(time.time())}.jpg"
-        time_offset = min(duration // 2, 5) if duration > 0 else 1
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-ss", str(time_offset),
-            "-i", video_path, "-vframes", "1",
-            "-vf", "scale=320:-1", candidate_thumb
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *ffmpeg_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        await proc.communicate()
-        if os.path.exists(candidate_thumb) and os.path.getsize(candidate_thumb) > 0:
-            thumb_path = candidate_thumb
-    except (FileNotFoundError, Exception) as e:
-        logger.debug(f"ffmpeg thumb extraction skipped: {e}")
-
-    return thumb_path, duration, width, height
-
-def build_file_caption(filename: str, file_size: int, category_desc: str, icon: str, user_id: int, custom_caption: str = None) -> tuple:
-    """بناء كابشن احترافي مع زر الحقوق التلقائي للقناة (Auto-Branding)"""
-    st = db_get_user_settings(user_id) if user_id else {}
-    if custom_caption:
-        caption = custom_caption
-    elif not st.get("enable_caption", 1):
-        caption = ""
-    else:
-        channel_tag = st.get("channel_tag", "").strip()
-        caption_lines = [
-            f"🎮 <b>File:</b> <code>{filename}</code>",
-            f"{icon} <b>Category:</b> {category_desc}",
-            f"📊 <b>Size:</b> <code>{humanbytes(file_size)}</code>"
-        ]
-        if channel_tag:
-            formatted_channel = f"@{channel_tag.lstrip('@')}" if not channel_tag.startswith("http") else channel_tag
-            caption_lines.append(f"📢 <b>Channel:</b> {formatted_channel}")
-        
-        caption = "\n".join(caption_lines)
-    
-    reply_markup = None
-    channel_tag = st.get("channel_tag", "").strip()
-    if channel_tag and st.get("channel_button", 1):
-        ch_clean = channel_tag.lstrip("@").replace("https://t.me/", "").replace("t.me/", "").strip()
-        ch_url = f"https://t.me/{ch_clean}" if not channel_tag.startswith("http") else channel_tag
-        ch_btn_text = f"📢 انضم لقناتنا ({channel_tag})" if not channel_tag.startswith("http") else "📢 انضم للقناة الرسمية"
-        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(ch_btn_text, url=ch_url)]])
-        
-    return caption, reply_markup
-
-async def resilient_send_media(client, chat_id, file_path, caption, is_video, progress_cb=None, thumb=None, duration=0, width=0, height=0, reply_markup=None):
-    max_retries = 4
-    for attempt in range(max_retries):
-        try:
-            if is_video:
-                kwargs = {
-                    "chat_id": chat_id,
-                    "video": file_path,
-                    "caption": caption,
-                    "supports_streaming": True,
-                    "progress": progress_cb,
-                    "parse_mode": ParseMode.HTML
-                }
-                if reply_markup:
-                    kwargs["reply_markup"] = reply_markup
-                if thumb and os.path.exists(thumb):
-                    kwargs["thumb"] = thumb
-                if duration > 0:
-                    kwargs["duration"] = duration
-                if width > 0 and height > 0:
-                    kwargs["width"] = width
-                    kwargs["height"] = height
-                return await client.send_video(**kwargs)
-            else:
-                kwargs = {
-                    "chat_id": chat_id,
-                    "document": file_path,
-                    "caption": caption,
-                    "progress": progress_cb,
-                    "parse_mode": ParseMode.HTML
-                }
-                if reply_markup:
-                    kwargs["reply_markup"] = reply_markup
-                return await client.send_document(**kwargs)
-        except FloodWait as fw:
-            logger.warning(f"Telegram FloodWait during upload: {fw.value}s - waiting...")
-            await asyncio.sleep(fw.value + 1)
-        except Exception as e:
-            logger.warning(f"Upload attempt {attempt+1} failed: {e}")
-            if attempt == max_retries - 1:
-                raise e
-            await asyncio.sleep(2.0)
-
-def is_cert_verification_error(exc: BaseException | None, seen: set | None = None) -> bool:
-    """
-    Returns True if exc is specifically a certificate verification failure
-    (e.g. broken certificate chain, missing intermediate, self-signed, expired, untrusted root).
-    Excludes non-certificate SSL errors (e.g. handshake failure, protocol mismatch, wrong version)
-    and non-SSL network/OS errors.
-    """
-    if exc is None:
-        return False
-    if seen is None:
-        seen = set()
-    exc_id = id(exc)
-    if exc_id in seen:
-        return False
-    seen.add(exc_id)
-
-    if isinstance(exc, ssl.SSLCertVerificationError):
-        return True
-    if isinstance(exc, aiohttp.ClientConnectorCertificateError):
-        return True
-
-    if CURL_CFFI_AVAILABLE:
-        try:
-            from curl_cffi.requests.exceptions import CertificateVerifyError
-            if isinstance(exc, CertificateVerifyError):
-                return True
-        except (ImportError, AttributeError):
-            pass
-        try:
-            from curl_cffi.curl import CurlError
-            if isinstance(exc, CurlError) and getattr(exc, "code", None) == 60:
-                return True
-        except (ImportError, AttributeError):
-            pass
-
-    err_str = str(exc)
-    if "CERTIFICATE_VERIFY_FAILED" in err_str or "SSLCertVerificationError" in err_str:
-        return True
-
-    cert_err = getattr(exc, "certificate_error", None)
-    if cert_err is not None and is_cert_verification_error(cert_err, seen):
-        return True
-
-    cause = getattr(exc, "__cause__", None)
-    if cause is not None and is_cert_verification_error(cause, seen):
-        return True
-
-    context = getattr(exc, "__context__", None)
-    if context is not None and is_cert_verification_error(context, seen):
-        return True
-
-    os_err = getattr(exc, "os_error", None)
-    if os_err is not None and is_cert_verification_error(os_err, seen):
-        return True
-
-    return False
-
 async def process_download_and_upload(
     raw_url: str,
     custom_name: str,
@@ -3984,7 +2327,7 @@ async def process_download_and_upload(
     forced_user_id: int | None = None
 ):
     if hop_count >= 2:
-        await safe_edit_text(status_msg, "❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, "❌ <b>Maximum download redirect limit reached!</b>", parse_mode=ParseMode.HTML)
         return
 
     file_path = None
@@ -4042,7 +2385,7 @@ async def process_download_and_upload(
             free_mb = f"{free_init / (1024*1024):.1f} MB"
             reserve_mb = f"{reserve_init / (1024*1024):.1f} MB"
             err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-            await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+            await keyboards.safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
             return
 
         # =========================================================================
@@ -4051,7 +2394,7 @@ async def process_download_and_upload(
         if is_hls_or_video_stream(direct_url) or is_hls_or_video_stream(raw_url):
             target_stream_url = direct_url if is_hls_or_video_stream(direct_url) else raw_url
             logger.info(f"🎬 HLS / Video Stream detected: {target_stream_url}")
-            await safe_edit_text(
+            await keyboards.safe_edit_text(
                 status_msg,
                 f"🎬 <b>{'جاري معالجة البث وتحويله إلى MP4...' if lang == 'ar' else 'Processing video stream to MP4...'}</b>",
                 parse_mode=ParseMode.HTML
@@ -4077,7 +2420,7 @@ async def process_download_and_upload(
                 is_video_type = True
                 download_success = True
             else:
-                await safe_edit_text(
+                await keyboards.safe_edit_text(
                     status_msg,
                     "❌ <b>Stream Extraction Failed:</b>\n"
                     "<code>Server returned 403 Forbidden or Stream Expired.</code>\n\n"
@@ -4121,7 +2464,7 @@ async def process_download_and_upload(
                                 f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
                                 f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{humanbytes(total_size_probe)}</code>"
                             )
-                            await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+                            await keyboards.safe_edit_text(status_msg, info_card, reply_markup=keyboards.make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
                             turbo_ok = await download_multi_stream_turbo(
                                 direct_url=direct_url,
@@ -4138,7 +2481,7 @@ async def process_download_and_upload(
                             if turbo_ok:
                                 download_success = True
             except Exception as turbo_err:
-                if is_cert_verification_error(turbo_err) and not ssl_unverified_used:
+                if validation.is_cert_verification_error(turbo_err) and not ssl_unverified_used:
                     host_name = parsed_url.netloc or parsed_url.hostname or direct_url
                     logger.warning(
                         f"TLS certificate verification failed for host {host_name} ({turbo_err}). "
@@ -4174,7 +2517,7 @@ async def process_download_and_upload(
                                         f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
                                         f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{humanbytes(total_size_probe)}</code>"
                                     )
-                                    await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+                                    await keyboards.safe_edit_text(status_msg, info_card, reply_markup=keyboards.make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
                                     turbo_ok = await download_multi_stream_turbo(
                                         direct_url=direct_url,
@@ -4247,7 +2590,7 @@ async def process_download_and_upload(
                                 f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
                                 f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{size_disp}</code>"
                             )
-                            await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+                            await keyboards.safe_edit_text(status_msg, info_card, reply_markup=keyboards.make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
                             mode = "a+b" if status_tracker["downloaded"] > 0 else "wb"
                             last_chunk_time = time.time()
@@ -4261,7 +2604,7 @@ async def process_download_and_upload(
                                     free_mb = f"{free_d / (1024*1024):.1f} MB"
                                     reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
                                     err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                                    await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+                                    await keyboards.safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                                     return
 
                             with open(file_path, mode) as f:
@@ -4270,14 +2613,14 @@ async def process_download_and_upload(
                                 
                                 async for chunk in resp.aiter_content(512 * 1024):
                                     if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                                        await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                        await keyboards.safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                         return
                                     if chunk:
                                         f.write(chunk)
                                         status_tracker["downloaded"] += len(chunk)
                                         last_chunk_time = time.time()
                                         
-                                        await progress_bar(
+                                        await keyboards.progress_bar(
                                             status_tracker["downloaded"],
                                             total_size,
                                             tr(lang, "downloading"),
@@ -4299,7 +2642,7 @@ async def process_download_and_upload(
                                 break
 
                     except Exception as ex:
-                        if is_cert_verification_error(ex) and not ssl_unverified_used:
+                        if validation.is_cert_verification_error(ex) and not ssl_unverified_used:
                             host_name = parsed_url.netloc or parsed_url.hostname or direct_url
                             logger.warning(
                                 f"TLS certificate verification failed for host {host_name} ({ex}). "
@@ -4339,7 +2682,7 @@ async def process_download_and_upload(
                                             f"{icon} <b>{'النوع' if lang == 'ar' else 'Category'}:</b> {category_desc}\n"
                                             f"📊 <b>{'الحجم' if lang == 'ar' else 'Size'}:</b> <code>{size_disp}</code>"
                                         )
-                                        await safe_edit_text(status_msg, info_card, reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+                                        await keyboards.safe_edit_text(status_msg, info_card, reply_markup=keyboards.make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
 
                                         mode = "a+b" if status_tracker["downloaded"] > 0 else "wb"
                                         last_chunk_time = time.time()
@@ -4353,7 +2696,7 @@ async def process_download_and_upload(
                                                 free_mb = f"{free_d / (1024*1024):.1f} MB"
                                                 reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
                                                 err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                                                await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+                                                await keyboards.safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                                                 return
 
                                         with open(file_path, mode) as f:
@@ -4362,14 +2705,14 @@ async def process_download_and_upload(
                                             
                                             async for chunk in resp.aiter_content(512 * 1024):
                                                 if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                                                    await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                                    await keyboards.safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                                     return
                                                 if chunk:
                                                     f.write(chunk)
                                                     status_tracker["downloaded"] += len(chunk)
                                                     last_chunk_time = time.time()
                                                     
-                                                    await progress_bar(
+                                                    await keyboards.progress_bar(
                                                         status_tracker["downloaded"],
                                                         total_size,
                                                         tr(lang, "downloading"),
@@ -4409,7 +2752,7 @@ async def process_download_and_upload(
                 async with aiohttp.ClientSession(connector=connector, timeout=timeout, auto_decompress=False) as session:
                     async with session.get(direct_url, headers=headers, allow_redirects=True, ssl=req_ssl) as response:
                         if response.status not in (200, 206):
-                            await safe_edit_text(status_msg, f"❌ <b>URL Error: Server responded with status {response.status}</b>", parse_mode=ParseMode.HTML)
+                            await keyboards.safe_edit_text(status_msg, f"❌ <b>URL Error: Server responded with status {response.status}</b>", parse_mode=ParseMode.HTML)
                             return
                         
                         content_length = response.headers.get("Content-Length")
@@ -4431,19 +2774,19 @@ async def process_download_and_upload(
                             free_mb = f"{free_d / (1024*1024):.1f} MB"
                             reserve_mb = f"{reserve_d / (1024*1024):.1f} MB"
                             err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                            await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+                            await keyboards.safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                             return
 
                         with open(file_path, "wb") as f:
                             async for chunk in response.content.iter_chunked(512 * 1024):
                                 if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-                                    await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
+                                    await keyboards.safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                     return
 
                                 if chunk:
                                     f.write(chunk)
                                     status_tracker["downloaded"] += len(chunk)
-                                    await progress_bar(
+                                    await keyboards.progress_bar(
                                         status_tracker["downloaded"],
                                         total_size,
                                         tr(lang, "downloading"),
@@ -4459,7 +2802,7 @@ async def process_download_and_upload(
             try:
                 await _perform_aiohttp_download(ssl_disabled=False)
             except Exception as e:
-                if is_cert_verification_error(e) and not ssl_unverified_used:
+                if validation.is_cert_verification_error(e) and not ssl_unverified_used:
                     host_name = parsed_url.netloc or parsed_url.hostname or direct_url
                     logger.warning(
                         f"TLS certificate verification failed for host {host_name} ({e}). "
@@ -4483,7 +2826,7 @@ async def process_download_and_upload(
         if not file_path or not os.path.exists(file_path) or actual_file_size == 0:
             if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 return
-            await safe_edit_text(
+            await keyboards.safe_edit_text(
                 status_msg,
                 "❌ <b>Download Failed:</b>\n"
                 "<code>The server was unable to retrieve data from this host.</code>\n\n"
@@ -4495,7 +2838,7 @@ async def process_download_and_upload(
         # =========================================================================
         # فحص التوقيع البنائي المزدوج مع دعم محرك System CURL الخارق
         # =========================================================================
-        is_binary, html_sample = is_valid_binary_file(file_path)
+        is_binary, html_sample = validation.is_valid_binary_file(file_path)
         if not is_binary and file_path and os.path.exists(file_path):
             os.remove(file_path)
             
@@ -4519,11 +2862,11 @@ async def process_download_and_upload(
             except Exception as curl_err:
                 logger.warning(f"CURL engine error: {curl_err}")
 
-            is_binary, html_sample = is_valid_binary_file(file_path)
+            is_binary, html_sample = validation.is_valid_binary_file(file_path)
 
         if not is_binary and file_path and os.path.exists(file_path):
             os.remove(file_path)
-            real_url = extract_real_download_link_from_html(html_sample, raw_url)
+            real_url = validation.extract_real_download_link_from_html(html_sample, raw_url)
             
             if real_url and real_url.split('#')[0] != raw_url.split('#')[0]:
                 logger.info(f"🔗 Real direct URL extracted from HTML: {real_url}")
@@ -4535,7 +2878,7 @@ async def process_download_and_upload(
                 if m_t:
                     page_title = re.sub(r'\s+', ' ', m_t.group(1)).strip()[:100]
                 err_detail = f"\n📄 <b>Page Title:</b> <code>{page_title}</code>" if page_title else ""
-                await safe_edit_text(
+                await keyboards.safe_edit_text(
                     status_msg,
                     f"❌ <b>URL is an HTML webpage, not a direct file link!</b>{err_detail}\n\n"
                     f"💡 <i>Make sure the link is a valid direct link and not expired or IP-locked.</i>",
@@ -4550,7 +2893,7 @@ async def process_download_and_upload(
         precomputed_apk_info = None
         if is_apk_family:
             loop = asyncio.get_running_loop()
-            apk_info = await loop.run_in_executor(None, inspect_apk, file_path)
+            apk_info = await loop.run_in_executor(None, apk_inspect.inspect_apk, file_path)
             if apk_info:
                 precomputed_apk_info = apk_info
                 pkg = apk_info.get("package")
@@ -4580,8 +2923,8 @@ async def process_download_and_upload(
                             flow_type="direct",
                             url_key=url_key
                         )
-                        warn_text = format_duplicate_warning_card(apk_info, dup_record, lang=lang)
-                        kb = make_duplicate_keyboard(pending_id, lang=lang)
+                        warn_text = dupguard.format_duplicate_warning_card(apk_info, dup_record, lang=lang)
+                        kb = keyboards.make_duplicate_keyboard(pending_id, lang=lang)
                         try:
                             await status_msg.delete()
                         except Exception:
@@ -4595,14 +2938,14 @@ async def process_download_and_upload(
         SPLIT_CHUNK_BYTES = 1900 * 1024 * 1024    # 1.90 GB
 
         CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
-        uploader = get_uploader_client()
+        uploader = clients.get_uploader_client()
         is_premium_active = (user_bot is not None) and getattr(user_bot, "is_connected", False) and (uploader == user_bot)
 
         # فحص إمكانية رفع الملف ككتلة واحدة (حتى 4GB) عبر حساب الـ Premium
         if actual_file_size > BOT_LIMIT_BYTES:
             if is_premium_active and actual_file_size <= (3950 * 1024 * 1024):
                 # رفع الملف بالكامل كملف واحد ضخم عبر حساب الـ Premium
-                await safe_edit_text(
+                await keyboards.safe_edit_text(
                     status_msg,
                     f"📤 <b>{'جاري الرفع عبر Telegram Premium...' if lang == 'ar' else f'Uploading {humanbytes(actual_file_size)} via Telegram Premium...'}</b>",
                     parse_mode=ParseMode.HTML
@@ -4613,23 +2956,23 @@ async def process_download_and_upload(
                 async def pyrogram_progress_prem(current, total):
                     if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                         return
-                    await progress_bar(
+                    await keyboards.progress_bar(
                         current, total, ("رفع Premium" if lang == "ar" else "Premium upload"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
                     )
 
-                caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
+                caption, brand_markup = upload.build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
                 
                 target_chat = CHANNEL_ID if CHANNEL_ID else "me"
                 is_vid = is_video_type and settings["upload_mode"] != "doc"
                 duration, width, height = 0, 0, 0
                 if is_vid and settings.get("enable_thumbs", 1):
-                    thumb_path, duration, width, height = await extract_video_metadata(file_path)
+                    thumb_path, duration, width, height = await upload.extract_video_metadata(file_path)
                 sent_msg = None
                 try:
-                    sent_msg = await resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+                    sent_msg = await upload.resilient_send_media(uploader, target_chat, file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
                 except Exception as prem_upload_err:
                     logger.warning(f"Direct premium upload target error, trying 'me': {prem_upload_err}")
-                    sent_msg = await resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+                    sent_msg = await upload.resilient_send_media(uploader, "me", file_path, caption, is_vid, pyrogram_progress_prem, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
 
                 total_time_spent = round(time.time() - start_time)
                 avg_speed = actual_file_size / total_time_spent if total_time_spent > 0 else 0
@@ -4656,7 +2999,7 @@ async def process_download_and_upload(
                     f"{extra_ssl_line}"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
-                await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
+                await apk_inspect.handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
                 return
             else:
                 # إذا لم يكن البريميوم مفعلاً -> تقسيم الملف لتفادي الانهيار
@@ -4667,11 +3010,11 @@ async def process_download_and_upload(
                     free_mb = f"{free_s / (1024*1024):.1f} MB"
                     reserve_mb = f"{reserve_s / (1024*1024):.1f} MB"
                     err_msg = tr(lang, "disk_low_error").format(needed=needed_mb, free=free_mb, reserve=reserve_mb)
-                    await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
+                    await keyboards.safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
                     return
 
                 num_parts = math.ceil(actual_file_size / SPLIT_CHUNK_BYTES)
-                await safe_edit_text(
+                await keyboards.safe_edit_text(
                     status_msg,
                     f"✂️ <b>{'تقسيم الملف إلى ' + str(num_parts) + ' أجزاء...' if lang == 'ar' else f'Splitting file into {num_parts} parts...'}</b>",
                     parse_mode=ParseMode.HTML
@@ -4724,24 +3067,24 @@ async def process_download_and_upload(
                     f"{extra_ssl_line}"
                 )
                 await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
-                await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
+                await apk_inspect.handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
                 return
 
-        await safe_edit_text(status_msg, f"📤 <b>{tr(lang, 'uploading')}</b>", reply_markup=make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, f"📤 <b>{tr(lang, 'uploading')}</b>", reply_markup=keyboards.make_cancel_keyboard(task_id, lang=lang), parse_mode=ParseMode.HTML)
         up_start_time = time.time()
         last_update = [0]
         
         async def pyrogram_progress(current, total):
             if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 return
-            await progress_bar(
+            await keyboards.progress_bar(
                 current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
             )
 
-        caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
+        caption, brand_markup = upload.build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
 
         if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
-            await safe_edit_text(status_msg, "🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
+            await keyboards.safe_edit_text(status_msg, "🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
             return
 
         CHANNEL_ID = parse_chat_id(os.environ.get("CHANNEL_ID", ""))
@@ -4749,15 +3092,15 @@ async def process_download_and_upload(
         
         duration, width, height = 0, 0, 0
         if force_video and settings.get("enable_thumbs", 1):
-            thumb_path, duration, width, height = await extract_video_metadata(file_path)
+            thumb_path, duration, width, height = await upload.extract_video_metadata(file_path)
 
         # 1. إرسال الملف فوراً ومباشرة للمستخدم عبر البوت
-        sent_msg = await resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
+        sent_msg = await upload.resilient_send_media(bot, user_msg.chat.id, file_path, caption, force_video, pyrogram_progress, thumb=thumb_path, duration=duration, width=width, height=height, reply_markup=brand_markup)
 
         # 2. النشر التلقائي في القناة (مثل @APKBlitz) إذا تم تحديد CHANNEL_ID في البيئة
         if CHANNEL_ID:
             try:
-                uploader = get_uploader_client()
+                uploader = clients.get_uploader_client()
                 if force_video:
                     kwargs = {
                         "chat_id": CHANNEL_ID,
@@ -4799,21 +3142,21 @@ async def process_download_and_upload(
             f"{extra_ssl_line}"
         )
         await user_msg.reply_text(success_card, parse_mode=ParseMode.HTML)
-        await handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
+        await apk_inspect.handle_apk_inspection_card(file_path, filename, user_id, user_msg, lang, precomputed_info=precomputed_apk_info)
 
     except aiohttp.ClientError as e:
-        await safe_edit_text(status_msg, f"❌ <b>Network Connection Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, f"❌ <b>Network Connection Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     except asyncio.TimeoutError:
-        await safe_edit_text(status_msg, "❌ <b>Request Timeout.</b>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, "❌ <b>Request Timeout.</b>", parse_mode=ParseMode.HTML)
     except OSError as e:
-        await safe_edit_text(status_msg, f"❌ <b>Disk/Storage Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, f"❌ <b>Disk/Storage Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     except MessageNotModified:
         pass
     except RPCError as e:
         if "MESSAGE_NOT_MODIFIED" not in str(e):
-            await safe_edit_text(status_msg, f"❌ <b>Telegram Upload Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+            await keyboards.safe_edit_text(status_msg, f"❌ <b>Telegram Upload Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     except Exception as e:
-        await safe_edit_text(status_msg, f"❌ <b>Unexpected Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
+        await keyboards.safe_edit_text(status_msg, f"❌ <b>Unexpected Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
         state.ACTIVE_TASKS.pop(task_id, None)
         if thumb_path and os.path.exists(thumb_path):

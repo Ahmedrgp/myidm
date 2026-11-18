@@ -320,7 +320,7 @@ class TestNoCardInspection(unittest.TestCase):
                 user_msg.chat.id = 1234567
                 user_msg.from_user.id = 99905
 
-                with patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send:
+                with patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send:
                     mock_send.return_value = MagicMock()
                     await bot.run_approved_pending_upload(pid, user_msg)
 

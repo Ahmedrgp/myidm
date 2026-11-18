@@ -95,8 +95,8 @@ class TestDupFix(unittest.TestCase):
         original_msg.reply_text = AsyncMock(side_effect=fake_reply_text)
 
         async def run_test():
-            with patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
-                 patch("bot.handle_apk_inspection_card", new_callable=AsyncMock) as mock_inspect_card:
+            with patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
+                 patch("myidm.apk_inspect.handle_apk_inspection_card", new_callable=AsyncMock) as mock_inspect_card:
                 await bot.run_approved_pending_upload(pid, original_msg)
                 return mock_send_media, mock_inspect_card
 

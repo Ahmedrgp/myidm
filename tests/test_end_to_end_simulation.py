@@ -40,7 +40,7 @@ async def run_end_to_end_test():
     runner = await start_local_test_server()
 
     try:
-        with patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
+        with patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
             user_msg = MagicMock()
             user_msg.reply_document = AsyncMock()
             user_msg.reply_video = AsyncMock()

@@ -436,8 +436,8 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         with patch("bot.unrestrict_direct_link", new_callable=AsyncMock, return_value=url), \
              patch("bot.is_hls_or_video_stream", return_value=True), \
              patch("bot.download_video_or_m3u8", new_callable=AsyncMock, return_value=(True, test_file, "test_doc.mp4")), \
-             patch("bot.is_valid_binary_file", return_value=(True, b"")), \
-             patch("bot.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg):
+             patch("myidm.validation.is_valid_binary_file", return_value=(True, b"")), \
+             patch("myidm.upload.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg):
             await bot.process_download_and_upload(
                 raw_url=url,
                 custom_name="",
@@ -500,11 +500,11 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         with patch("bot.unrestrict_direct_link", new_callable=AsyncMock, return_value=url), \
              patch("bot.is_hls_or_video_stream", return_value=True), \
              patch("bot.download_video_or_m3u8", new_callable=AsyncMock, return_value=(True, test_file, "test_app.apk")), \
-             patch("bot.is_valid_binary_file", return_value=(True, b"")), \
-             patch("bot.inspect_apk", return_value=apk_inspect_data), \
+             patch("myidm.validation.is_valid_binary_file", return_value=(True, b"")), \
+             patch("myidm.apk_inspect.inspect_apk", return_value=apk_inspect_data), \
              patch("bot.db_check_apk_duplicate", return_value=None), \
-             patch("bot.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg), \
-             patch("bot.handle_apk_inspection_card", new_callable=AsyncMock):
+             patch("myidm.upload.resilient_send_media", new_callable=AsyncMock, return_value=fake_msg), \
+             patch("myidm.apk_inspect.handle_apk_inspection_card", new_callable=AsyncMock):
             await bot.process_download_and_upload(
                 raw_url=url,
                 custom_name="",

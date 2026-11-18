@@ -165,7 +165,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
 
         with patch("bot.CURL_CFFI_AVAILABLE", False), \
              patch("aiohttp.TCPConnector", FakeDownloadConnector), \
-             patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
+             patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
              self.assertLogs("bot", level="WARNING") as captured_logs:
 
             await bot.process_download_and_upload(
@@ -237,7 +237,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
 
         with patch("bot.CURL_CFFI_AVAILABLE", False), \
              patch("aiohttp.TCPConnector", FakeNonCertSSLConnector), \
-             patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
+             patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
 
             await bot.process_download_and_upload(
                 raw_url=self.test_url,
@@ -294,7 +294,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
 
         with patch("bot.CURL_CFFI_AVAILABLE", False), \
              patch("aiohttp.TCPConnector", FakeRefusedConnector), \
-             patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
+             patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
 
             await bot.process_download_and_upload(
                 raw_url=self.test_url,
@@ -351,7 +351,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
 
         with patch("bot.CURL_CFFI_AVAILABLE", False), \
              patch("aiohttp.TCPConnector", FakeAlwaysFailCertConnector), \
-             patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
+             patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media:
 
             await bot.process_download_and_upload(
                 raw_url=self.test_url,
@@ -420,7 +420,7 @@ class TestSSLRetry(unittest.IsolatedAsyncioTestCase):
         with patch("bot.CURL_CFFI_AVAILABLE", True), \
              patch("bot.unrestrict_direct_link", new_callable=AsyncMock, side_effect=lambda u: u), \
              patch("bot.CurlAsyncSession", FakeCurlSession), \
-             patch("bot.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
+             patch("myidm.upload.resilient_send_media", new_callable=AsyncMock) as mock_send_media, \
              self.assertLogs("bot", level="WARNING") as captured_logs:
 
             await bot.process_download_and_upload(
