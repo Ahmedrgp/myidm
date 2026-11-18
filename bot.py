@@ -1,14 +1,4 @@
 import asyncio
-
-# ==========================================
-# 0. إصلاح مشكلة Python 3.12+ / 3.14 على Render
-# ==========================================
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
 import os
 import sys
 import json
@@ -16,9 +6,6 @@ import time
 import math
 import re
 import gc
-import logging
-import tempfile
-import sqlite3
 import zipfile
 import urllib.parse
 import html
@@ -26,1004 +13,106 @@ import hashlib
 import shutil
 import struct
 import datetime
-import secrets
+import ssl
+import aiohttp
+from aiohttp import web
 from zoneinfo import ZoneInfo
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.serialization import pkcs7
-from dotenv import load_dotenv
-import ssl
-import aiohttp
-from aiohttp import web
-
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError, MessageNotModified
 
-import pyrogram.utils
-# Fix 64-bit Telegram Channel IDs in Pyrogram (-100...)
-pyrogram.utils.MIN_CHANNEL_ID = -10099999999999
-pyrogram.utils.MAX_CHANNEL_ID = -1000000000000
+import myidm
+from myidm import config as cfg
+from myidm import state
+from myidm import texts
+from myidm import db
+from myidm import utils
 
-try:
-    from curl_cffi.requests import AsyncSession as CurlAsyncSession
-    CURL_CFFI_AVAILABLE = True
-except ImportError:
-    CURL_CFFI_AVAILABLE = False
+# Transitional Phase 1-5 re-exports for un-moved code in bot.py and un-migrated tests
+_safe_ok_parse_json = myidm._safe_ok_parse_json
+logger = cfg.logger
+psutil = cfg.psutil
+PSUTIL_AVAILABLE = cfg.PSUTIL_AVAILABLE
+CurlAsyncSession = cfg.CurlAsyncSession
+CURL_CFFI_AVAILABLE = cfg.CURL_CFFI_AVAILABLE
+TorrentDownloader = cfg.TorrentDownloader
+TORRENTP_AVAILABLE = cfg.TORRENTP_AVAILABLE
+yt_dlp = cfg.yt_dlp
+YTDLP_AVAILABLE = cfg.YTDLP_AVAILABLE
+API_ID = cfg.API_ID
+API_HASH = cfg.API_HASH
+BOT_TOKEN = cfg.BOT_TOKEN
+PORT = cfg.PORT
+ADMIN_IDS = cfg.ADMIN_IDS
+ADMIN_ID = cfg.ADMIN_ID
+is_admin = cfg.is_admin
+_owner_filter = cfg._owner_filter
+owner_filter = cfg.owner_filter
+USER_SESSION_STRING = cfg.USER_SESSION_STRING
+MAX_SINGLE_FILE_SIZE = cfg.MAX_SINGLE_FILE_SIZE
+SPLIT_PART_SIZE = cfg.SPLIT_PART_SIZE
+BASE_TMP = cfg.BASE_TMP
+START_TIME = cfg.START_TIME
+STEALTH_HEADERS = cfg.STEALTH_HEADERS
+TLS_VERIFICATION_SKIPPED_NOTICE = cfg.TLS_VERIFICATION_SKIPPED_NOTICE
 
-try:
-    from torrentp import TorrentDownloader
-    TORRENTP_AVAILABLE = True
-except ImportError:
-    TORRENTP_AVAILABLE = False
+ACTIVE_TASKS = state.ACTIVE_TASKS
+request_queue = state.request_queue
 
-try:
-    import yt_dlp
-    YTDLP_AVAILABLE = True
-    try:
-        from yt_dlp.extractor import odnoklassniki
-        _orig_ok_parse_json = odnoklassniki.OdnoklassnikiIE._parse_json
-        def _safe_ok_parse_json(self, json_string, *args, **kwargs):
-            if isinstance(json_string, (dict, list)):
-                return json_string
-            return _orig_ok_parse_json(self, json_string, *args, **kwargs)
-        odnoklassniki.OdnoklassnikiIE._parse_json = _safe_ok_parse_json
-    except Exception as _patch_err:
-        pass
-except ImportError:
-    YTDLP_AVAILABLE = False
+TEXTS = texts.TEXTS
+tr = texts.tr
 
-load_dotenv()
+ALLOWED_USER_SETTINGS = db.ALLOWED_USER_SETTINGS
+get_or_create_dashboard_secret = db.get_or_create_dashboard_secret
+init_db = db.init_db
+db_add_user = db.db_add_user
+db_get_user_settings = db.db_get_user_settings
+db_add_replacement = db.db_add_replacement
+db_get_user_replacements = db.db_get_user_replacements
+db_clear_user_replacements = db.db_clear_user_replacements
+db_get_total_users_count = db.db_get_total_users_count
+db_update_user_setting = db.db_update_user_setting
+db_add_history = db.db_add_history
+db_get_history = db.db_get_history
+db_add_apk_inspection = db.db_add_apk_inspection
+db_get_last_inspection_for_package = db.db_get_last_inspection_for_package
+db_check_apk_duplicate = db.db_check_apk_duplicate
+db_add_pending_download = db.db_add_pending_download
+db_get_pending_download = db.db_get_pending_download
+db_update_pending_status = db.db_update_pending_status
+db_record_delivery = db.db_record_delivery
+db_get_delivery = db.db_get_delivery
+db_get_delivery_by_id = db.db_get_delivery_by_id
+db_delete_delivery = db.db_delete_delivery
+db_get_apk_inspection = db.db_get_apk_inspection
+cleanup_expired_pending_downloads = db.cleanup_expired_pending_downloads
+db_get_all_user_ids = db.db_get_all_user_ids
+db_get_global_stats = db.db_get_global_stats
 
-# ==========================================
-# 1. إعدادات OMNIPOTENT OVERLORD ENGINE ⚡🌌👑
-# ==========================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
+humanbytes = utils.humanbytes
+time_formatter = utils.time_formatter
+format_cairo_time = utils.format_cairo_time
+get_god_category = utils.get_god_category
+sanitize_filename = utils.sanitize_filename
+clean_and_rename_filename = utils.clean_and_rename_filename
+smart_extract_filename = utils.smart_extract_filename
+parse_chat_id = utils.parse_chat_id
+check_disk_space = utils.check_disk_space
+check_disk_space_for_split = utils.check_disk_space_for_split
 
-API_ID = int(os.environ.get("API_ID", 0))
-API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-PORT = int(os.environ.get("PORT", 8080))
-# حسابات المالك المصرح لها حصرياً (Private Owner Access)
-ADMIN_IDS = {1594244556, 7639267441}
-_env_admin = os.environ.get("ADMIN_ID", "").strip()
-if _env_admin:
-    for _aid in _env_admin.replace(";", ",").split(","):
-        if _aid.strip().isdigit():
-            ADMIN_IDS.add(int(_aid.strip()))
+_DYNAMIC_CFG_ATTRS = frozenset({"DATA_DIR", "DB_FILE", "PENDING_DIR", "DOWNLOAD_DIR", "DISK_MIN_FREE_GB"})
 
-ADMIN_ID = 1594244556
 
-def is_admin(user_id: int) -> bool:
-    if not ADMIN_IDS:
-        return True
-    return user_id in ADMIN_IDS
-
-def _owner_filter(_, __, message):
-    if not ADMIN_IDS:
-        return True
-    uid = message.from_user.id if message.from_user else 0
-    return uid in ADMIN_IDS
-
-owner_filter = filters.create(_owner_filter, name="OwnerFilter")
-
-USER_SESSION_STRING = (os.environ.get("USER_SESSION_STRING", "") or os.environ.get("PREMIUM_SESSION", "")).strip().strip("'\"")
-
-if USER_SESSION_STRING:
-    MAX_SINGLE_FILE_SIZE = 4000 * 1024 * 1024  # 4,000 MB (~4 GB Telegram Premium Limit)
-    SPLIT_PART_SIZE = 3950 * 1024 * 1024      # 3.95 GB
-else:
-    MAX_SINGLE_FILE_SIZE = 2000 * 1024 * 1024  # 2,000 MB (~2 GB Bot Limit)
-    SPLIT_PART_SIZE = 1950 * 1024 * 1024      # 1.95 GB
-
-DATA_DIR = os.environ.get("DATA_DIR", ".")
-os.makedirs(DATA_DIR, exist_ok=True)
-DB_FILE = os.path.join(DATA_DIR, "bot_database.db")
-PENDING_DIR = os.path.join(DATA_DIR, "pending_downloads")
-os.makedirs(PENDING_DIR, exist_ok=True)
-
-DISK_MIN_FREE_GB = float(os.environ.get("DISK_MIN_FREE_GB", "2"))
-
-BASE_TMP = "/tmp" if os.path.exists("/tmp") else tempfile.gettempdir()
-DOWNLOAD_DIR = os.path.join(BASE_TMP, "ctele_downloads")
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-START_TIME = time.time()
-
-def get_or_create_dashboard_secret() -> str:
-    env_secret = os.environ.get("DASHBOARD_SECRET", "").strip()
-    if env_secret:
-        return env_secret
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS bot_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    cursor.execute("SELECT value FROM bot_meta WHERE key = 'dashboard_secret'")
-    row = cursor.fetchone()
-    if row and row[0]:
-        secret = row[0]
-    else:
-        secret = secrets.token_hex(24)
-        cursor.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('dashboard_secret', ?)", (secret,))
-        conn.commit()
-    conn.close()
-    return secret
-
-DASHBOARD_SECRET = get_or_create_dashboard_secret()
-
-STEALTH_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive"
-}
-
-# ==========================================
-# 2. قاموس اللغات المزدوج الشامل (Arabic & English Dictionary)
-# ==========================================
-TEXTS = {
-    "ar": {
-        "welcome": (
-            "<b>مرحباً {name}</b>\n\n"
-            "<b>طريقة الاستخدام:</b>\n"
-            "• أرسل رابط تحميل مباشر (HTTP / HTTPS)\n"
-            "• أرسل رابط تورينت (Magnet Link)\n"
-            "• أرسل ملف تورينت (.torrent)"
-        ),
-        "god_panel": (
-            "<b>لوحة التحكم</b>\n"
-            "<b>خيوط التحميل:</b> <code>{threads}x</code>\n"
-            "<b>دعم التورينت:</b> <code>مفعل (Magnet و Torrent)</code>\n"
-            "<b>اللغة:</b> <code>العربية</code>\n"
-            "📄 <b>إجمالي الملفات:</b> <code>{files}</code>\n"
-            "📊 <b>إجمالي البيانات:</b> <code>{bytes}</code>"
-        ),
-        "probe_info": (
-            "🔎 <b>فحص الروابط</b>\n"
-            "لمعاينة تفاصيل الملف مسبقاً:\n\n"
-            "<code>/probe الرابط المباشر</code>"
-        ),
-        "settings_title": "⚙️ <b>الإعدادات والتفضيلات:</b>",
-        "btn_panel": "لوحة التحكم",
-        "btn_history": "📜 سجل التحميلات",
-        "btn_settings": "⚙️ إعدادات التسريع واللغة",
-        "btn_probe": "🔎 فحص الروابط Probe",
-        "btn_stats": "📊 إحصائيات المحرك",
-        "btn_back": "🔙 العودة للقائمة الرئيسية",
-        "btn_cancel": "🛑 إلغاء العملية فوراً",
-        "btn_lang": "🌐 اللغة: 🇸🇦 العربية",
-        "btn_mode_auto": "🎬 وضع الرفع: تلقائي",
-        "btn_mode_doc": "📄 وضع الرفع: مستند دائم",
-        "btn_threads": "خيوط التحميل: {threads}x",
-        "btn_caption_on": "📝 الوصف: مفعل ✅",
-        "btn_caption_off": "📝 الوصف: معطل ❌",
-        "btn_thumbs_on": "🖼️ المعاينة والمصغرات: مفعلة ✅",
-        "btn_thumbs_off": "🖼️ المعاينة والمصغرات: معطلة ❌",
-        "btn_cleantags_on": "🧹 تنظيف الإعلانات: مفعل ✅",
-        "btn_cleantags_off": "🧹 تنظيف الإعلانات: معطل ❌",
-        "transfer_rate": "معدل النقل:",
-        "processed_size": "📦 الحجم المعالج:",
-        "eta": "⏱️ الوقت المتبقي:",
-        "downloading": "جاري التنزيل...",
-        "uploading": "جاري الرفع المباشر إلى تليجرام...",
-        "torrent_connecting": "جاري الاتصال بالتورينت وجلب البيانات...",
-        "success_title": "✅ تمت العملية بنجاح",
-        "file_name": "📄 اسم الملف:",
-        "category": "التصنيف:",
-        "final_size": "📊 الحجم النهائي:",
-        "total_time": "⏱️ الوقت الإجمالي:",
-        "avg_speed": "متوسط السرعة:",
-        "dup_warning_title": "⚠️ <b>تنبيه: تم تنزيل هذا التطبيق مسبقاً بنفس الإصدار!</b>",
-        "dup_prev_header": "📜 <b>بيانات التنزيل السابق المسجل:</b>",
-        "dup_prev_date": "🕒 تاريخ التنزيل السابق:",
-        "dup_prev_hash": "🔑 بصمة الملف السابقة:",
-        "dup_signer_match": "✍️ التوقيع: ✅ نفس شهادة التوقيع الأصلية",
-        "dup_signer_diff": "✍️ التوقيع: ⚠️ شهادة توقيع مختلفة تماماً!",
-        "dup_prompt": "💡 <b>هل ترغب في تنزيله ورفعه إلى تليجرام مجدداً؟</b>",
-        "btn_dup_download": "✅ نزّله تاني",
-        "btn_dup_cancel": "🛑 إلغاء",
-        "dup_cancelled_notice": "🛑 <b>تم إلغاء تنزيل التطبيق المكرر وحذفه بنجاح.</b>",
-        "dup_approved_notice": "⏳ <b>جاري رفع الملف المعتمد إلى تليجرام...</b>",
-        "dup_expired_alert": "⚠️ هذه العملية منتهية الصلاحية (Expired).",
-        "dup_already_done_alert": "✅ تم رفع هذا الملف مسبقاً.",
-        "dup_already_cancelled_alert": "🛑 تم إلغاء هذه العملية مسبقاً.",
-        "dup_file_missing_alert": "❌ الملف غير موجود في مسار الانتظار.",
-        "disk_low_error": (
-            "❌ <b>مساحة القرص غير كافية لإتمام العملية!</b>\n\n"
-            "📊 <b>المطلوب:</b> <code>{needed}</code>\n"
-            "💾 <b>المتاح حالياً:</b> <code>{free}</code>\n"
-            "🛡️ <b>الحد الأدنى للاحتياطي:</b> <code>{reserve}</code>\n\n"
-            "💡 <i>يرجى تحرير بعض المساحة على الخادم والمحاولة مجدداً.</i>"
-        ),
-        "help_text": (
-            "<b>دليل الاستخدام</b>\n"
-            "1. <b>الروابط المباشرة:</b> أرسل رابط الملف المباشر هنا\n"
-            "2. <b>روابط التورينت (Magnet):</b> أرسل رابط <code>magnet:?xt=...</code>\n"
-            "3. <b>ملفات التورينت:</b> أرسل ملف <code>.torrent</code> مباشرة\n"
-            "4. <b>حزمة ZIP:</b> أرسل <code>[ZIP]</code> في السطر الأول ثم الروابط لدمجها في ملف ZIP واحد\n\n"
-            "<b>تسمية ووصف مخصص:</b>\n"
-            "• <code>الرابط | اسم مخصص | وصف مخصص</code>"
-        )
-    },
-    "en": {
-        "welcome": (
-            "<b>Welcome {name}</b>\n\n"
-            "<b>How to use:</b>\n"
-            "• Send a direct download link (HTTP / HTTPS)\n"
-            "• Send a Magnet link (magnet:?xt=...)\n"
-            "• Send a .torrent file"
-        ),
-        "god_panel": (
-            "<b>Control Panel</b>\n"
-            "<b>Download threads:</b> <code>{threads}x</code>\n"
-            "<b>Torrent support:</b> <code>Active (Magnet & Torrent)</code>\n"
-            "<b>Language:</b> <code>English</code>\n"
-            "📄 <b>Total files:</b> <code>{files}</code>\n"
-            "📊 <b>Total data:</b> <code>{bytes}</code>"
-        ),
-        "probe_info": (
-            "🔎 <b>Link Probe</b>\n"
-            "Inspect file details before downloading:\n\n"
-            "<code>/probe Direct_URL</code>"
-        ),
-        "settings_title": "⚙️ <b>Settings & Preferences:</b>",
-        "btn_panel": "Control Panel",
-        "btn_history": "📜 Download History",
-        "btn_settings": "⚙️ Settings & Language",
-        "btn_probe": "🔎 Probe Inspector",
-        "btn_stats": "📊 Engine Stats",
-        "btn_back": "🔙 Back to Main Menu",
-        "btn_cancel": "🛑 Cancel Task Immediately",
-        "btn_lang": "🌐 Language: 🇺🇸 English",
-        "btn_mode_auto": "🎬 Upload Mode: Auto Media",
-        "btn_mode_doc": "📄 Upload Mode: Document",
-        "btn_threads": "Threads: {threads}x",
-        "btn_caption_on": "📝 Caption: Enabled ✅",
-        "btn_caption_off": "📝 Caption: Disabled ❌",
-        "btn_thumbs_on": "🖼️ Thumbnails: Enabled ✅",
-        "btn_thumbs_off": "🖼️ Thumbnails: Disabled ❌",
-        "btn_cleantags_on": "🧹 Clean Ads & Tags: Enabled ✅",
-        "btn_cleantags_off": "🧹 Clean Ads & Tags: Disabled ❌",
-        "transfer_rate": "Transfer Speed:",
-        "processed_size": "📦 Processed Data:",
-        "eta": "⏱️ Time Remaining:",
-        "downloading": "Downloading...",
-        "uploading": "Uploading directly to Telegram...",
-        "torrent_connecting": "Connecting to peers and fetching metadata...",
-        "success_title": "✅ Download complete",
-        "file_name": "📄 File Name:",
-        "category": "Category:",
-        "final_size": "📊 Final Size:",
-        "total_time": "⏱️ Total Duration:",
-        "avg_speed": "Average Speed:",
-        "dup_warning_title": "⚠️ <b>Warning: Duplicate APK Download Detected!</b>",
-        "dup_prev_header": "📜 <b>Previous Recorded Download:</b>",
-        "dup_prev_date": "🕒 Previous Date:",
-        "dup_prev_hash": "🔑 Previous File SHA-256:",
-        "dup_signer_match": "✍️ Signer: ✅ Same original signing certificate",
-        "dup_signer_diff": "✍️ Signer: ⚠️ DIFFERENT signing certificate!",
-        "dup_prompt": "💡 <b>Do you want to download and upload it to Telegram again?</b>",
-        "btn_dup_download": "✅ Download anyway",
-        "btn_dup_cancel": "🛑 Cancel",
-        "dup_cancelled_notice": "🛑 <b>Duplicate download cancelled and temporary file removed.</b>",
-        "dup_approved_notice": "⏳ <b>Uploading approved file to Telegram...</b>",
-        "dup_expired_alert": "⚠️ This pending task has expired.",
-        "dup_already_done_alert": "✅ This file has already been uploaded.",
-        "dup_already_cancelled_alert": "🛑 This task was already cancelled.",
-        "dup_file_missing_alert": "❌ File not found in pending directory.",
-        "disk_low_error": (
-            "❌ <b>Insufficient disk space to proceed!</b>\n\n"
-            "📊 <b>Required:</b> <code>{needed}</code>\n"
-            "💾 <b>Available:</b> <code>{free}</code>\n"
-            "🛡️ <b>Minimum Reserve:</b> <code>{reserve}</code>\n\n"
-            "💡 <i>Please free up disk space on the server and try again.</i>"
-        ),
-        "help_text": (
-            "<b>User Guide</b>\n"
-            "1. <b>Direct Links:</b> Send any direct HTTP/HTTPS URL\n"
-            "2. <b>Torrent Magnets:</b> Send <code>magnet:?xt=...</code>\n"
-            "3. <b>Torrent Files:</b> Send any <code>.torrent</code> file directly\n"
-            "4. <b>ZIP Bundle:</b> Send <code>[ZIP]</code> as the first line, then list URLs to combine into a ZIP\n\n"
-            "<b>Custom Naming & Captions:</b>\n"
-            "• <code>URL | Custom_Name.ext | Custom_Caption</code>"
-        )
-    }
-}
-
-# ==========================================
-# 3. إدارة وتحديث قاعدة البيانات الدائمة
-# ==========================================
-ALLOWED_USER_SETTINGS = {
-    "upload_mode", "enable_thumbs", "enable_caption", "fast_speed",
-    "god_threads", "lang", "clean_tags", "custom_prefix", "custom_suffix",
-    "channel_tag", "brand_position", "channel_button"
-}
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("PRAGMA journal_mode=WAL;")
-        cursor.execute("PRAGMA busy_timeout=30000;")
-    except Exception:
-        pass
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            joined_at REAL,
-            upload_mode TEXT DEFAULT 'auto',
-            enable_thumbs INTEGER DEFAULT 1,
-            enable_caption INTEGER DEFAULT 1,
-            fast_speed INTEGER DEFAULT 1,
-            god_threads INTEGER DEFAULT 64,
-            lang TEXT DEFAULT 'ar',
-            clean_tags INTEGER DEFAULT 1,
-            custom_prefix TEXT DEFAULT '',
-            custom_suffix TEXT DEFAULT '',
-            channel_tag TEXT DEFAULT '',
-            brand_position TEXT DEFAULT 'suffix',
-            channel_button INTEGER DEFAULT 1
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            filename TEXT,
-            size INTEGER,
-            category TEXT DEFAULT '📁 عام',
-            timestamp REAL
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS global_stats (
-            key TEXT PRIMARY KEY,
-            val_num INTEGER DEFAULT 0,
-            val_float REAL DEFAULT 0.0
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS custom_replacements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            find_text TEXT,
-            replace_text TEXT
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS apk_inspections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            package TEXT,
-            version_name TEXT,
-            version_code INTEGER,
-            file_sha256 TEXT,
-            cert_sha256 TEXT,
-            size INTEGER,
-            filename TEXT,
-            checked_at REAL,
-            min_sdk INTEGER,
-            target_sdk INTEGER
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS download_deliveries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            url_key TEXT NOT NULL,
-            filename TEXT,
-            total_size INTEGER,
-            chat_id INTEGER NOT NULL,
-            message_ids TEXT NOT NULL,
-            package TEXT,
-            version_code INTEGER,
-            created_at INTEGER NOT NULL
-        )
-    """)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_deliveries_user_url ON download_deliveries(user_id, url_key)")
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS bot_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pending_downloads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            chat_id INTEGER,
-            file_path TEXT,
-            filename TEXT,
-            custom_caption TEXT,
-            package TEXT,
-            version_name TEXT,
-            version_code INTEGER,
-            size INTEGER,
-            created_at REAL,
-            status TEXT DEFAULT 'pending',
-            inspection_json TEXT,
-            flow_type TEXT DEFAULT 'direct'
-        )
-    """)
-    
-    for col, col_def in [
-        ("god_threads", "INTEGER DEFAULT 64"),
-        ("lang", "TEXT DEFAULT 'ar'"),
-        ("clean_tags", "INTEGER DEFAULT 1"),
-        ("custom_prefix", "TEXT DEFAULT ''"),
-        ("custom_suffix", "TEXT DEFAULT ''"),
-        ("channel_tag", "TEXT DEFAULT ''"),
-        ("brand_position", "TEXT DEFAULT 'suffix'"),
-        ("channel_button", "INTEGER DEFAULT 1")
-    ]:
-        try:
-            cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
-        except sqlite3.OperationalError:
-            pass
-
-    try:
-        cursor.execute("ALTER TABLE history ADD COLUMN category TEXT DEFAULT '📁 عام'")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        cursor.execute("ALTER TABLE pending_downloads ADD COLUMN url_key TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        cursor.execute("ALTER TABLE apk_inspections ADD COLUMN min_sdk INTEGER")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        cursor.execute("ALTER TABLE apk_inspections ADD COLUMN target_sdk INTEGER")
-    except sqlite3.OperationalError:
-        pass
-
-    conn.commit()
-    conn.close()
-
-def db_add_user(user_id: int, username: str, first_name: str):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR IGNORE INTO users (user_id, username, first_name, joined_at)
-        VALUES (?, ?, ?, ?)
-    """, (user_id, username, first_name, time.time()))
-    conn.commit()
-    conn.close()
-
-def db_get_user_settings(user_id: int) -> dict:
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            SELECT upload_mode, enable_thumbs, enable_caption, fast_speed, god_threads, lang,
-                   clean_tags, custom_prefix, custom_suffix, channel_tag, brand_position, channel_button
-            FROM users WHERE user_id = ?
-        """, (user_id,))
-        row = cursor.fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    conn.close()
-    if row:
-        return {
-            "upload_mode": row[0] or "auto",
-            "enable_thumbs": row[1] if row[1] is not None else 1,
-            "enable_caption": row[2] if row[2] is not None else 1,
-            "fast_speed": row[3] if row[3] is not None else 1,
-            "god_threads": row[4] or 64,
-            "lang": row[5] or "ar",
-            "clean_tags": row[6] if row[6] is not None else 1,
-            "custom_prefix": row[7] or "",
-            "custom_suffix": row[8] or "",
-            "channel_tag": (row[9] if len(row) > 9 and row[9] is not None else "") or "",
-            "brand_position": (row[10] if len(row) > 10 and row[10] is not None else "suffix") or "suffix",
-            "channel_button": (row[11] if len(row) > 11 and row[11] is not None else 1)
-        }
-    return {
-        "upload_mode": "auto",
-        "enable_thumbs": 1,
-        "enable_caption": 1,
-        "fast_speed": 1,
-        "god_threads": 64,
-        "lang": "ar",
-        "clean_tags": 1,
-        "custom_prefix": "",
-        "custom_suffix": "",
-        "channel_tag": "",
-        "brand_position": "suffix",
-        "channel_button": 1
-    }
-
-def db_add_replacement(user_id: int, find_text: str, replace_text: str):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO custom_replacements (user_id, find_text, replace_text)
-        VALUES (?, ?, ?)
-    """, (user_id, find_text, replace_text))
-    conn.commit()
-    conn.close()
-
-def db_get_user_replacements(user_id: int) -> list:
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("SELECT find_text, replace_text FROM custom_replacements WHERE user_id = ?", (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
-
-def db_clear_user_replacements(user_id: int):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM custom_replacements WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
-def db_get_total_users_count() -> int:
-    try:
-        conn = sqlite3.connect(DB_FILE, timeout=30)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM users")
-        cnt = cursor.fetchone()[0]
-        conn.close()
-        return cnt
-    except Exception:
-        return 0
-
-def db_update_user_setting(user_id: int, key: str, val):
-    if key not in ALLOWED_USER_SETTINGS:
-        logger.warning(f"Rejected attempt to update unauthorized setting: {key}")
-        return
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute(f"UPDATE users SET {key} = ? WHERE user_id = ?", (val, user_id))
-    conn.commit()
-    conn.close()
-
-def db_add_history(user_id: int, filename: str, size: int, category: str):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO history (user_id, filename, size, category, timestamp) VALUES (?, ?, ?, ?, ?)",
-                   (user_id, filename, size, category, time.time()))
-    conn.commit()
-    conn.close()
-
-def db_get_history(user_id: int, limit: int = 10) -> list:
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT filename, size, category, timestamp FROM history WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit))
-        rows = cursor.fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    conn.close()
-    return rows
-
-def db_add_apk_inspection(user_id: int, package: str, version_name: str, version_code: int,
-                          file_sha256: str, cert_sha256: str, size: int, filename: str,
-                          checked_at: float = None, min_sdk: int | None = None, target_sdk: int | None = None) -> int:
-    if checked_at is None:
-        checked_at = time.time()
-    if min_sdk is not None:
-        try:
-            min_sdk = int(min_sdk)
-        except (ValueError, TypeError):
-            pass
-    if target_sdk is not None:
-        try:
-            target_sdk = int(target_sdk)
-        except (ValueError, TypeError):
-            pass
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO apk_inspections (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk))
-    row_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return row_id
-
-def db_get_last_inspection_for_package(package: str, exclude_latest: bool = True, exclude_version_code: int | None = None) -> dict | None:
-    if not package:
-        return None
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        if exclude_version_code is not None:
-            cursor.execute("""
-                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk
-                FROM apk_inspections
-                WHERE package = ? AND version_code != ?
-                ORDER BY id DESC
-                LIMIT 1
-            """, (package, exclude_version_code))
-            row = cursor.fetchone()
-            if not row:
-                return None
-            return {
-                "id": row[0],
-                "user_id": row[1],
-                "package": row[2],
-                "version_name": row[3],
-                "version_code": row[4],
-                "file_sha256": row[5],
-                "cert_sha256": row[6],
-                "size": row[7],
-                "filename": row[8],
-                "checked_at": row[9],
-                "min_sdk": row[10],
-                "target_sdk": row[11]
-            }
-        else:
-            limit = 2 if exclude_latest else 1
-            cursor.execute("""
-                SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk
-                FROM apk_inspections
-                WHERE package = ?
-                ORDER BY id DESC
-                LIMIT ?
-            """, (package, limit))
-            rows = cursor.fetchall()
-            if not rows:
-                return None
-            if exclude_latest:
-                if len(rows) < 2:
-                    return None
-                row = rows[1]
-            else:
-                row = rows[0]
-            return {
-                "id": row[0],
-                "user_id": row[1],
-                "package": row[2],
-                "version_name": row[3],
-                "version_code": row[4],
-                "file_sha256": row[5],
-                "cert_sha256": row[6],
-                "size": row[7],
-                "filename": row[8],
-                "checked_at": row[9],
-                "min_sdk": row[10],
-                "target_sdk": row[11]
-            }
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        conn.close()
-
-def db_check_apk_duplicate(package: str, version_code: int) -> dict | None:
-    if not package or version_code is None:
-        return None
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            SELECT id, user_id, package, version_name, version_code, file_sha256, cert_sha256, size, filename, checked_at, min_sdk, target_sdk
-            FROM apk_inspections
-            WHERE package = ? AND version_code = ?
-            ORDER BY id DESC
-            LIMIT 1
-        """, (package, version_code))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "id": row[0],
-            "user_id": row[1],
-            "package": row[2],
-            "version_name": row[3],
-            "version_code": row[4],
-            "file_sha256": row[5],
-            "cert_sha256": row[6],
-            "size": row[7],
-            "filename": row[8],
-            "checked_at": row[9],
-            "min_sdk": row[10],
-            "target_sdk": row[11]
-        }
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        conn.close()
-
-def db_add_pending_download(user_id: int, chat_id: int, file_path: str, filename: str,
-                            custom_caption: str, package: str, version_name: str,
-                            version_code: int, size: int, status: str = "pending",
-                            inspection_json: str = "", flow_type: str = "direct",
-                            url_key: str = "") -> int:
-    if url_key:
-        try:
-            _ij = json.loads(inspection_json) if inspection_json else {}
-            if isinstance(_ij, dict):
-                _ij["url_key"] = url_key
-                inspection_json = json.dumps(_ij)
-        except Exception:
-            pass
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO pending_downloads (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type, url_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, time.time(), status, inspection_json, flow_type, url_key))
-    except sqlite3.OperationalError:
-        cursor.execute("""
-            INSERT INTO pending_downloads (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, time.time(), status, inspection_json, flow_type))
-    row_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return row_id
-
-def db_get_pending_download(pending_id: int) -> dict | None:
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        try:
-            cursor.execute("""
-                SELECT id, user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type, url_key
-                FROM pending_downloads
-                WHERE id = ?
-            """, (pending_id,))
-            row = cursor.fetchone()
-            if not row:
-                return None
-            ret = {
-                "id": row[0],
-                "user_id": row[1],
-                "chat_id": row[2],
-                "file_path": row[3],
-                "filename": row[4],
-                "custom_caption": row[5],
-                "package": row[6],
-                "version_name": row[7],
-                "version_code": row[8],
-                "size": row[9],
-                "created_at": row[10],
-                "status": row[11],
-                "inspection_json": row[12],
-                "flow_type": row[13],
-                "url_key": row[14] or ""
-            }
-        except sqlite3.OperationalError:
-            cursor.execute("""
-                SELECT id, user_id, chat_id, file_path, filename, custom_caption, package, version_name, version_code, size, created_at, status, inspection_json, flow_type
-                FROM pending_downloads
-                WHERE id = ?
-            """, (pending_id,))
-            row = cursor.fetchone()
-            if not row:
-                return None
-            ret = {
-                "id": row[0],
-                "user_id": row[1],
-                "chat_id": row[2],
-                "file_path": row[3],
-                "filename": row[4],
-                "custom_caption": row[5],
-                "package": row[6],
-                "version_name": row[7],
-                "version_code": row[8],
-                "size": row[9],
-                "created_at": row[10],
-                "status": row[11],
-                "inspection_json": row[12],
-                "flow_type": row[13],
-                "url_key": ""
-            }
-        if not ret["url_key"] and ret["inspection_json"]:
-            try:
-                _ij = json.loads(ret["inspection_json"])
-                if isinstance(_ij, dict) and _ij.get("url_key"):
-                    ret["url_key"] = _ij["url_key"]
-            except Exception:
-                pass
-        return ret
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        conn.close()
-
-def db_update_pending_status(pending_id: int, status: str):
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE pending_downloads SET status = ? WHERE id = ?", (status, pending_id))
-    conn.commit()
-    conn.close()
-
-def db_record_delivery(user_id: int, url_key: str, filename: str, total_size: int,
-                       chat_id: int, message_ids: list[int],
-                       package: str | None = None, version_code: int | None = None,
-                       created_at: int | None = None) -> int:
-    if not url_key or not message_ids or not user_id:
-        return 0
-    if created_at is None:
-        created_at = int(time.time())
-    msg_ids_json = json.dumps([int(m) for m in message_ids])
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM download_deliveries WHERE user_id = ? AND url_key = ?", (user_id, url_key))
-        cursor.execute("""
-            INSERT INTO download_deliveries (user_id, url_key, filename, total_size, chat_id, message_ids, package, version_code, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, url_key, filename, total_size, chat_id, msg_ids_json, package, version_code, created_at))
-        row_id = cursor.lastrowid
-        conn.commit()
-        return row_id
-    finally:
-        conn.close()
-
-def db_get_delivery(user_id: int, url_key: str) -> dict | None:
-    if not user_id or not url_key:
-        return None
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            SELECT id, user_id, url_key, filename, total_size, chat_id, message_ids, package, version_code, created_at
-            FROM download_deliveries
-            WHERE user_id = ? AND url_key = ?
-            ORDER BY id DESC
-            LIMIT 1
-        """, (user_id, url_key))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        try:
-            mids = json.loads(row[6])
-        except Exception:
-            mids = []
-        return {
-            "id": row[0],
-            "user_id": row[1],
-            "url_key": row[2],
-            "filename": row[3],
-            "total_size": row[4],
-            "chat_id": row[5],
-            "message_ids": mids,
-            "package": row[7],
-            "version_code": row[8],
-            "created_at": row[9]
-        }
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        conn.close()
-
-def db_get_delivery_by_id(delivery_id: int) -> dict | None:
-    if not delivery_id:
-        return None
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            SELECT id, user_id, url_key, filename, total_size, chat_id, message_ids, package, version_code, created_at
-            FROM download_deliveries
-            WHERE id = ?
-        """, (delivery_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        try:
-            mids = json.loads(row[6])
-        except Exception:
-            mids = []
-        return {
-            "id": row[0],
-            "user_id": row[1],
-            "url_key": row[2],
-            "filename": row[3],
-            "total_size": row[4],
-            "chat_id": row[5],
-            "message_ids": mids,
-            "package": row[7],
-            "version_code": row[8],
-            "created_at": row[9]
-        }
-    except sqlite3.OperationalError:
-        return None
-    finally:
-        conn.close()
-
-def db_delete_delivery(delivery_id: int):
-    if not delivery_id:
-        return
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM download_deliveries WHERE id = ?", (delivery_id,))
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
-    finally:
-        conn.close()
-
-def db_get_apk_inspection(package: str, version_code: int) -> dict | None:
-    return db_check_apk_duplicate(package, version_code)
-
-def cleanup_expired_pending_downloads():
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cutoff = time.time() - (24 * 3600)
-    try:
-        cursor.execute("SELECT id, file_path FROM pending_downloads WHERE created_at < ? AND status IN ('pending', 'approved')", (cutoff,))
-        rows = cursor.fetchall()
-        for pid, fpath in rows:
-            if fpath and os.path.exists(fpath):
-                try:
-                    os.remove(fpath)
-                except Exception as e:
-                    logger.warning(f"Failed to delete expired pending file {fpath}: {e}")
-            cursor.execute("UPDATE pending_downloads SET status = 'expired' WHERE id = ?", (pid,))
-        conn.commit()
-    except Exception as ex:
-        logger.warning(f"Error cleaning expired pending downloads: {ex}")
-    finally:
-        conn.close()
-
-def db_get_all_user_ids() -> list:
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT user_id FROM users")
-        rows = cursor.fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-    conn.close()
-    return [r[0] for r in rows if r[0]]
-
-def db_get_global_stats() -> dict:
-    conn = sqlite3.connect(DB_FILE, timeout=30)
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    total_users = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*), SUM(size) FROM history")
-    hist_row = cursor.fetchone()
-    total_files = hist_row[0] or 0
-    total_bytes = hist_row[1] or 0
-    conn.close()
-    return {"users": total_users, "files": total_files, "bytes": total_bytes}
-
-def tr(lang: str, key: str, **kwargs) -> str:
-    lang_dict = TEXTS.get(lang, TEXTS["ar"])
-    template = lang_dict.get(key, TEXTS["ar"].get(key, ""))
-    return template.format(**kwargs) if kwargs else template
-
-init_db()
-
-ACTIVE_TASKS = {}
-request_queue = asyncio.Queue()
+def __getattr__(name: str):
+    if name in _DYNAMIC_CFG_ATTRS:
+        return getattr(cfg, name)
+    if name == "DASHBOARD_SECRET":
+        return db.DASHBOARD_SECRET
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # ==========================================
 # 4. خادم الويب للإنعاش (aiohttp Web Server)
@@ -1299,7 +388,7 @@ DASHBOARD_HTML_TEMPLATE = """<!DOCTYPE html>
 
 async def handle_dashboard_view(request):
     key = request.query.get("key", "")
-    if key != DASHBOARD_SECRET:
+    if key != db.DASHBOARD_SECRET:
         return web.Response(
             text="""<!DOCTYPE html><html><head><meta charset="utf-8"><title>403 Access Denied</title>
             <style>body{background:#0a0e17;color:#ef4444;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}
@@ -1309,11 +398,11 @@ async def handle_dashboard_view(request):
             status=403,
             content_type="text/html"
         )
-    return web.Response(text=DASHBOARD_HTML_TEMPLATE.replace("__SECRET_KEY__", DASHBOARD_SECRET), content_type="text/html")
+    return web.Response(text=DASHBOARD_HTML_TEMPLATE.replace("__SECRET_KEY__", db.DASHBOARD_SECRET), content_type="text/html")
 
 async def handle_dashboard_stats_api(request):
     key = request.query.get("key", "")
-    if key != DASHBOARD_SECRET:
+    if key != db.DASHBOARD_SECRET:
         return web.json_response({"error": "unauthorized"}, status=403)
 
     cpu = psutil.cpu_percent(interval=None) if PSUTIL_AVAILABLE else 0.0
@@ -1322,12 +411,12 @@ async def handle_dashboard_stats_api(request):
     ram_total = round(vmem.total / (1024 * 1024)) if vmem else 0
     ram_percent = vmem.percent if vmem else 0.0
 
-    disk = shutil.disk_usage(DOWNLOAD_DIR)
+    disk = shutil.disk_usage(cfg.DOWNLOAD_DIR)
     disk_free_gb = round(disk.free / (1024**3), 1)
     disk_total_gb = round(disk.total / (1024**3), 1)
     disk_used_gb = round((disk.total - disk.free) / (1024**3), 1)
     disk_percent = round((disk.total - disk.free) / disk.total * 100, 1)
-    reserve_bytes = int(DISK_MIN_FREE_GB * (1024 ** 3))
+    reserve_bytes = int(cfg.DISK_MIN_FREE_GB * (1024 ** 3))
     disk_low = bool(disk.free < reserve_bytes * 2)
 
     uptime_sec = int(time.time() - START_TIME)
@@ -1335,7 +424,7 @@ async def handle_dashboard_stats_api(request):
     total_users = db_get_total_users_count()
 
     tasks_data = []
-    for tid, tinfo in list(ACTIVE_TASKS.items()):
+    for tid, tinfo in list(state.ACTIVE_TASKS.items()):
         tasks_data.append({
             "task_id": tid,
             "cancelled": tinfo.get("cancelled", False),
@@ -1357,8 +446,8 @@ async def handle_dashboard_stats_api(request):
         "disk_low": disk_low,
         "uptime_seconds": uptime_sec,
         "uptime_formatted": time_formatter(uptime_sec),
-        "active_tasks_count": len(ACTIVE_TASKS),
-        "queue_size": request_queue.qsize(),
+        "active_tasks_count": len(state.ACTIVE_TASKS),
+        "queue_size": state.request_queue.qsize(),
         "total_users": total_users,
         "total_files": g_stats.get("files", 0),
         "total_bytes": g_stats.get("bytes", 0),
@@ -1368,11 +457,11 @@ async def handle_dashboard_stats_api(request):
 
 async def handle_dashboard_cancel_task_api(request):
     key = request.query.get("key", "")
-    if key != DASHBOARD_SECRET:
+    if key != db.DASHBOARD_SECRET:
         return web.json_response({"error": "unauthorized"}, status=403)
     tid = request.query.get("task_id", "")
-    if tid in ACTIVE_TASKS:
-        ACTIVE_TASKS[tid]["cancelled"] = True
+    if tid in state.ACTIVE_TASKS:
+        state.ACTIVE_TASKS[tid]["cancelled"] = True
         return web.json_response({"success": True, "task_id": tid, "status": "cancelled"})
     return web.json_response({"success": False, "error": "not_found"})
 
@@ -1396,7 +485,7 @@ bot = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workdir=DATA_DIR,
+    workdir=cfg.DATA_DIR,
     workers=16
 )
 
@@ -1407,7 +496,7 @@ if USER_SESSION_STRING:
         api_id=API_ID,
         api_hash=API_HASH,
         session_string=USER_SESSION_STRING,
-        workdir=DATA_DIR,
+        workdir=cfg.DATA_DIR,
         workers=16
     )
 
@@ -1487,7 +576,7 @@ def extract_video_embed_from_html(html_text: str, original_url: str) -> tuple:
     extracted_title = ""
     if title_match:
         raw_t = html.unescape(title_match.group(1)).strip()
-        cleaned = re.split(r'[-|–—•»]', raw_t)[0].strip()
+        cleaned = re.split('[-|\u2013\u2014•»]', raw_t)[0].strip()
         cleaned = re.sub(r'[\\/*?:"<>|]', '', cleaned).strip()
         extracted_title = cleaned
 
@@ -1885,243 +974,6 @@ async def unrestrict_direct_link(url: str) -> str:
         pass
 
     return url
-
-# ==========================================
-# 8. التنسيق المساعد وحساب الأحجام والوقت
-# ==========================================
-def humanbytes(size) -> str:
-    if not size:
-        return "0 B"
-    try:
-        size = float(size)
-    except (ValueError, TypeError):
-        return "0 B"
-    if size <= 0:
-        return "0 B"
-    power = 1024
-    n = 0
-    power_labels = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
-    while size >= power and n < len(power_labels) - 1:
-        size /= power
-        n += 1
-    return f"{round(size, 2)} {power_labels[n]}"
-
-def time_formatter(seconds: int) -> str:
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
-    tmp = ((f"{days}d, " if days else "") +
-           (f"{hours}h, " if hours else "") +
-           (f"{minutes}m, " if minutes else "") +
-           (f"{seconds}s" if seconds else ""))
-    return tmp if tmp else "0s"
-
-def get_god_category(filename: str) -> tuple:
-    ext = os.path.splitext(filename)[1].lower()
-    if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.3gp', '.wmv'):
-        return "🎬", "Video", True
-    elif ext in ('.mp3', '.m4a', '.flac', '.wav', '.aac', '.ogg', '.opus', '.wma'):
-        return "🎵", "Audio", False
-    elif ext in ('.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso'):
-        return "📦", "Archive", False
-    elif ext in ('.apk', '.xapk', '.apks', '.exe', '.msi', '.py', '.js', '.html'):
-        return "📱", "Software", False
-    elif ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.svg'):
-        return "🖼️", "Image", False
-    elif ext in ('.pdf', '.docx', '.doc', '.txt', '.epub'):
-        return "📄", "Document", False
-    else:
-        return "📁", "General", False
-
-def sanitize_filename(filename: str) -> str:
-    base = os.path.basename(filename.replace("\\", "/"))
-    clean = re.sub(r'[\\/*?:"<>|\r\n\t]', '_', base).strip('. ')
-    return clean or f"file_{int(time.time())}.bin"
-
-def clean_and_rename_filename(raw_filename: str, user_id: int = 0) -> str:
-    """محرك تطهير الوسوم وتعديل الأسماء الذكي (Smart Renamer & Tag Cleaner)"""
-    if not raw_filename:
-        return f"file_{int(time.time())}.bin"
-    
-    base = os.path.basename(raw_filename.replace("\\", "/"))
-    name_part, ext_part = os.path.splitext(base)
-    
-    st = db_get_user_settings(user_id) if user_id else {}
-    clean_tags = st.get("clean_tags", 1)
-    prefix = st.get("custom_prefix", "")
-    suffix = st.get("custom_suffix", "")
-    
-    # 1. إزالة الإعلانات والوسوم الدعائية تلقائياً إذا كانت مفعلة
-    if clean_tags:
-        tlds = r'(?:com|ru|net|org|to|io|me|site|online|store|vip|cc|xyz|app|club|info|biz)'
-        # إزالة وسوم الإعلانات المحصورة بين أقواس أولاً
-        name_part = re.sub(r'(?i)\[(?:TG|telegram|official|channel)[^\]]*\]', '', name_part)
-        name_part = re.sub(r'(?i)\((?:TG|telegram|official|channel)[^)]*\)', '', name_part)
-        name_part = re.sub(r'(?i)\{(?:TG|telegram|official|channel)[^}]*\}', '', name_part)
-        # إزالة أي أقواس تحتوي على روابط أو أسماء مواقع (مثل [an1.com] أو (5play.ru))
-        name_part = re.sub(r'(?i)\[[^\]]*\.' + tlds + r'[^\]]*\]', '', name_part)
-        name_part = re.sub(r'(?i)\([^)]*\.' + tlds + r'[^)]*\)', '', name_part)
-        name_part = re.sub(r'(?i)\{[^}]*\.' + tlds + r'[^}]*\}', '', name_part)
-        # إزالة الروابط الكاملة: www.site.com, site.com, t.me/xxx, https://...
-        name_part = re.sub(r'(?i)(?:https?://|www\.)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?', '', name_part)
-        name_part = re.sub(r'(?i)(?:t\.me|telegram\.me)/[a-zA-Z0-9_]+', '', name_part)
-        # إزالة الإشارات: @ChannelName
-        name_part = re.sub(r'@[a-zA-Z0-9_]+', '', name_part)
-        # ✅ إزالة نطاقات المواقع الروسية والعالمية المضمنة في أسماء الملفات (مثل: -an1.com, _5play.ru, -androeed.ru, -apkpure.com, إلخ)
-        # مسبوقة بفاصل (- أو _ أو مسافة) ويليها النطاق
-        name_part = re.sub(r'(?i)[-_\s]+[a-zA-Z0-9-]+\.' + tlds + r'(?:\b|$)', '', name_part)
-        # حالة وجود النطاق في بداية الاسم (مثل: an1.com_Subway_Surfers)
-        name_part = re.sub(r'(?i)^[a-zA-Z0-9-]+\.' + tlds + r'[-_\s.]+', '', name_part)
-        # إزالة أسماء أشهر مواقع المود الشائعة إذا وجدت مفصولة حتى لو بدون امتداد
-        name_part = re.sub(r'(?i)[-_\s]+(?:an1|5play|androeed|lenov|pdalife|apkmody|apkpure|rexdl|revdl|happymod|moddroid|playmods)(?=[-_\s]|$)', '', name_part)
-
-    # 2. تطبيق قواعد الاستبدال المخصصة المحددة من المستخدم/المسؤول
-    if user_id:
-        try:
-            rules = db_get_user_replacements(user_id)
-            for f_txt, r_txt in rules:
-                if f_txt and f_txt in name_part:
-                    name_part = name_part.replace(f_txt, r_txt)
-        except Exception:
-            pass
-
-    # 3. تطهير المسافات والرموز الزائدة
-    name_part = re.sub(r'[\s_]+', ' ', name_part).strip(' .-_')
-    if not name_part:
-        name_part = f"file_{int(time.time())}"
-
-    # 4. تطبيق حقوق القناة التلقائية (Auto-Branding) والبادئة واللاحقة المخصصة
-    channel_tag = st.get("channel_tag", "").strip()
-    brand_position = st.get("brand_position", "suffix")
-    
-    # تطبيق وسم القناة التلقائي إذا لم تكن هناك لاحقة/بادئة يدوية تتعارض
-    if channel_tag:
-        clean_tag = channel_tag if channel_tag.startswith("@") or channel_tag.startswith("http") else f"@{channel_tag}"
-        if brand_position == "suffix" and not suffix:
-            name_part = f"{name_part} {clean_tag}".strip()
-        elif brand_position == "prefix" and not prefix:
-            name_part = f"[{clean_tag}] {name_part}".strip()
-
-    if prefix:
-        name_part = f"{prefix.strip()} {name_part}".strip()
-    if suffix:
-        name_part = f"{name_part} {suffix.strip()}".strip()
-
-    final_name = f"{name_part}{ext_part}"
-    return sanitize_filename(final_name)
-
-def smart_extract_filename(url: str, headers: dict) -> str:
-    content_disp = headers.get("Content-Disposition", "") or headers.get("content-disposition", "")
-    if content_disp:
-        fn_star = re.search(r"filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;\r\n]+)", content_disp, re.IGNORECASE)
-        if fn_star:
-            clean_star = fn_star.group(1).strip('"\'; ')
-            if clean_star:
-                return sanitize_filename(urllib.parse.unquote(clean_star))
-
-        fn_match = re.search(r'filename\s*=\s*("([^"]+)"|([^;\r\n]+))', content_disp, re.IGNORECASE)
-        if fn_match:
-            filename = (fn_match.group(2) or fn_match.group(3) or "").strip('"\'; ')
-            if filename:
-                return sanitize_filename(urllib.parse.unquote(filename))
-    
-    parsed = urllib.parse.urlparse(url)
-    if "okcdn.ru" in url:
-        return f"video_{int(time.time())}.mp4"
-    filename = os.path.basename(parsed.path)
-    ctype = (headers.get("Content-Type", "") or headers.get("content-type", "")).lower()
-
-    ext_map = {
-        "video/mp4": ".mp4",
-        "video/x-matroska": ".mkv",
-        "application/pdf": ".pdf",
-        "application/zip": ".zip",
-        "application/x-rar-compressed": ".rar",
-        "image/jpeg": ".jpg",
-        "image/png": ".png",
-        "audio/mpeg": ".mp3",
-        "application/vnd.android.package-archive": ".apk",
-        "text/plain": ".txt",
-        "text/html": ".html"
-    }
-
-    if filename:
-        clean_fn = urllib.parse.unquote(filename).strip()
-        if clean_fn:
-            if "." in clean_fn:
-                if clean_fn.lower().endswith((".php", ".asp", ".aspx", ".jsp", ".bin", ".cgi")):
-                    if "video/mp4" in ctype or "video" in ctype:
-                        base = os.path.splitext(clean_fn)[0]
-                        return sanitize_filename(f"{base}.mp4" if base != "video" else f"video_{int(time.time())}.mp4")
-                    elif "application/vnd.android.package-archive" in ctype:
-                        return sanitize_filename(f"{os.path.splitext(clean_fn)[0]}.apk")
-                else:
-                    return sanitize_filename(clean_fn)
-            else:
-                return sanitize_filename(clean_fn)
-
-    for mime, ext in ext_map.items():
-        if mime in ctype:
-            return sanitize_filename(f"download_{int(time.time())}{ext}")
-
-    return f"file_{int(time.time())}.bin"
-
-def parse_chat_id(chat_id_raw):
-    if not chat_id_raw:
-        return None
-    chat_id_str = str(chat_id_raw).strip()
-    if (chat_id_str.startswith("-") and chat_id_str[1:].isdigit()) or chat_id_str.isdigit():
-        return int(chat_id_str)
-    return chat_id_str
-
-def check_disk_space(path: str, needed_bytes: int | None = None) -> tuple[bool, int, int, int]:
-    """
-    Checks if there is enough free disk space on the filesystem of `path`.
-    Returns (ok: bool, needed_bytes: int, free_bytes: int, reserve_bytes: int).
-    Rule:
-    - If needed_bytes is known (> 0): require free >= needed_bytes * 1.25 + reserve.
-    - If needed_bytes is unknown or <= 0: require free >= reserve * 2.
-    """
-    reserve_bytes = int(DISK_MIN_FREE_GB * (1024 ** 3))
-    try:
-        check_dir = path
-        while check_dir and not os.path.exists(check_dir):
-            parent = os.path.dirname(check_dir)
-            if parent == check_dir:
-                break
-            check_dir = parent
-        if not check_dir or not os.path.exists(check_dir):
-            check_dir = "."
-        usage = shutil.disk_usage(check_dir)
-        free_bytes = usage.free
-    except Exception as e:
-        logger.warning(f"disk_usage check failed for {path}: {e}")
-        free_bytes = 0
-
-    if needed_bytes is not None and needed_bytes > 0:
-        req_free = int(needed_bytes * 1.25) + reserve_bytes
-        ok = free_bytes >= req_free
-    else:
-        req_free = reserve_bytes * 2
-        ok = free_bytes >= req_free
-
-    return ok, (needed_bytes or 0), free_bytes, reserve_bytes
-
-def check_disk_space_for_split(path: str, piece_size: int) -> tuple[bool, int, int, int]:
-    """
-    Checks disk space before splitting a file.
-    Rule: require free >= piece_size + reserve.
-    """
-    reserve_bytes = int(DISK_MIN_FREE_GB * (1024 ** 3))
-    try:
-        check_dir = path if os.path.exists(path) else (os.path.dirname(path) or ".")
-        usage = shutil.disk_usage(check_dir)
-        free_bytes = usage.free
-    except Exception as e:
-        logger.warning(f"disk_usage split check failed for {path}: {e}")
-        free_bytes = 0
-    ok = free_bytes >= (piece_size + reserve_bytes)
-    return ok, piece_size, free_bytes, reserve_bytes
 
 def make_start_keyboard(lang: str = "ar", is_admin: bool = False):
     buttons = [
@@ -2625,7 +1477,7 @@ def inspect_apk(file_path: str) -> dict | None:
                     bundle_rule_en = f"largest APK entry ({e_base})"
                     bundle_rule_ar = f"الملف الأكبر ({e_base})"
                     
-                tmp_dir = DOWNLOAD_DIR if os.path.exists(DOWNLOAD_DIR) else (os.path.dirname(file_path) or os.getcwd())
+                tmp_dir = cfg.DOWNLOAD_DIR if os.path.exists(cfg.DOWNLOAD_DIR) else (os.path.dirname(file_path) or os.getcwd())
                 temp_extracted_apk = os.path.join(tmp_dir, f"_temp_inspect_{os.getpid()}_{int(time.time()*1000)}.apk")
                 with z_bundle.open(chosen_entry) as src, open(temp_extracted_apk, "wb") as dst:
                     shutil.copyfileobj(src, dst, length=1024 * 1024)
@@ -2706,14 +1558,6 @@ def inspect_apk(file_path: str) -> dict | None:
         "base_apk_sha256": base_apk_sha256,
         "filename": os.path.basename(file_path)
     }
-
-def format_cairo_time(epoch_time: float) -> str:
-    try:
-        tz = ZoneInfo("Africa/Cairo")
-    except Exception:
-        tz = datetime.timezone(datetime.timedelta(hours=3))
-    dt = datetime.datetime.fromtimestamp(epoch_time, tz=tz)
-    return dt.strftime("%Y-%m-%d %H:%M Cairo")
 
 def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") -> str:
     if not info:
@@ -2865,9 +1709,9 @@ def format_apk_inspection_card(info: dict, prev: dict | None, lang: str = "ar") 
                     lines.append(f"✅ Same signer as v{prev_v}")
             else:
                 if lang == "ar":
-                    lines.append(f"⚠️ موقّع مختلف عن الإصدار v{prev_v} — تم تغيير التوقيع (لن يتم تثبيت التحديثات فوق الإصدار القديم)")
+                    lines.append(f"⚠️ موقّع مختلف عن الإصدار v{prev_v} \u2014 تم تغيير التوقيع (لن يتم تثبيت التحديثات فوق الإصدار القديم)")
                 else:
-                    lines.append(f"⚠️ DIFFERENT signer than v{prev_v} — signature changed (updates will NOT install over the old version)")
+                    lines.append(f"⚠️ DIFFERENT signer than v{prev_v} \u2014 signature changed (updates will NOT install over the old version)")
 
     # Time
     checked_at = info.get("checked_at", time.time())
@@ -3171,7 +2015,7 @@ async def run_approved_pending_upload(pending_id: int, original_msg: Message):
         parse_mode=ParseMode.HTML
     )
     task_id = f"task_{int(time.time() * 1000)}"
-    ACTIVE_TASKS[task_id] = {"cancelled": False}
+    state.ACTIVE_TASKS[task_id] = {"cancelled": False}
     start_time = time.time()
 
     try:
@@ -3338,7 +2182,7 @@ async def stats_command_handler(client: Client, message: Message):
         return
     st = db_get_user_settings(user_id)
     g_stats = db_get_global_stats()
-    queue_size = request_queue.qsize()
+    queue_size = state.request_queue.qsize()
     uptime_sec = int(time.time() - START_TIME)
     
     stats_text = (
@@ -3677,8 +2521,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
         
         if data.startswith("cancel_"):
             task_id = data.split("cancel_", 1)[1]
-            if task_id in ACTIVE_TASKS:
-                ACTIVE_TASKS[task_id]["cancelled"] = True
+            if task_id in state.ACTIVE_TASKS:
+                state.ACTIVE_TASKS[task_id]["cancelled"] = True
                 await query.answer("🛑 Task cancelled / تم الإلغاء...", show_alert=True)
             else:
                 await query.answer("⚠️ Task already completed.", show_alert=True)
@@ -3874,7 +2718,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
                 await query.answer("⛔ هذا القسم مخصص لمالك البوت فقط!", show_alert=True)
                 return
             g_stats = db_get_global_stats()
-            queue_size = request_queue.qsize()
+            queue_size = state.request_queue.qsize()
             uptime_sec = int(time.time() - START_TIME)
             admin_card = (
                 f"<b>لوحة المسؤول (Admin)</b>\n"
@@ -3922,7 +2766,7 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
         elif data == "btn_stats":
             g_stats = db_get_global_stats()
-            queue_size = request_queue.qsize()
+            queue_size = state.request_queue.qsize()
             uptime_sec = int(time.time() - START_TIME)
             stats_text = (
                 f"📊 <b>الإحصائيات / Stats:</b>\n"
@@ -3956,8 +2800,8 @@ async def handle_document_torrent(client: Client, message: Message):
     doc = message.document
     if doc and doc.file_name and doc.file_name.lower().endswith(".torrent"):
         status_msg = await message.reply_text("🧲 <b>Downloading .torrent file & initializing Torrent Engine...</b>", parse_mode=ParseMode.HTML)
-        torrent_file = await message.download(file_name=os.path.join(DOWNLOAD_DIR, doc.file_name))
-        await request_queue.put(("torrent", torrent_file, status_msg, message))
+        torrent_file = await message.download(file_name=os.path.join(cfg.DOWNLOAD_DIR, doc.file_name))
+        await state.request_queue.put(("torrent", torrent_file, status_msg, message))
 
 # ==========================================
 # 11. استقبال الروابط الفورية والتورينت المغناطيسي (Magnet Links)
@@ -3987,7 +2831,7 @@ async def handle_all_messages(client: Client, message: Message):
         if magnet_match:
             magnet_url = magnet_match.group(0)
             status_msg = await message.reply_text("🧲 <b>جاري الاتصال بالتورينت... / Connecting to peers...</b>", parse_mode=ParseMode.HTML)
-            await request_queue.put(("torrent", magnet_url, status_msg, message))
+            await state.request_queue.put(("torrent", magnet_url, status_msg, message))
             return
 
     is_zip_bundle = False
@@ -4014,7 +2858,7 @@ async def handle_all_messages(client: Client, message: Message):
 
     if is_zip_bundle:
         status_msg = await message.reply_text("📦 <b>Downloading files & building single ZIP bundle...</b>", parse_mode=ParseMode.HTML)
-        await request_queue.put(("zip_bundle", valid_requests, status_msg, message))
+        await state.request_queue.put(("zip_bundle", valid_requests, status_msg, message))
         return
 
     if len(valid_requests) > 1:
@@ -4025,7 +2869,7 @@ async def handle_all_messages(client: Client, message: Message):
 
     for item in valid_requests:
         url, custom_name, custom_caption = item
-        queue_pos = request_queue.qsize() + 1
+        queue_pos = state.request_queue.qsize() + 1
         
         if queue_pos > 1:
             status_msg = await message.reply_text(
@@ -4039,7 +2883,7 @@ async def handle_all_messages(client: Client, message: Message):
                 parse_mode=ParseMode.HTML
             )
 
-        await request_queue.put(("single", (url, custom_name, custom_caption), status_msg, message))
+        await state.request_queue.put(("single", (url, custom_name, custom_caption), status_msg, message))
 
 async def handle_queued_task(task_data):
     task_type = task_data[0]
@@ -4056,12 +2900,12 @@ async def handle_queued_task(task_data):
     except Exception as e:
         logger.exception(f"Task error: {e}")
     finally:
-        request_queue.task_done()
+        state.request_queue.task_done()
         gc.collect()
 
 async def queue_worker():
     while True:
-        task_data = await request_queue.get()
+        task_data = await state.request_queue.get()
         asyncio.create_task(handle_queued_task(task_data))
 
 # ==========================================
@@ -4077,7 +2921,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
         return
 
     task_id = f"task_{int(time.time() * 1000)}"
-    ACTIVE_TASKS[task_id] = {"cancelled": False}
+    state.ACTIVE_TASKS[task_id] = {"cancelled": False}
     start_time = time.time()
     
     await safe_edit_text(
@@ -4088,7 +2932,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
     )
 
     try:
-        ok_disk, _, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, None)
+        ok_disk, _, free_d, reserve_d = check_disk_space(cfg.DOWNLOAD_DIR, None)
         if not ok_disk:
             logger.error(f"Torrent disk check failed: free={free_d}, reserve={reserve_d}")
             needed_mb = "غير محدد" if lang == "ar" else "Unknown"
@@ -4098,11 +2942,11 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
             await safe_edit_text(status_msg, err_msg, parse_mode=ParseMode.HTML)
             return
 
-        downloader = TorrentDownloader(torrent_src, save_path=DOWNLOAD_DIR)
+        downloader = TorrentDownloader(torrent_src, save_path=cfg.DOWNLOAD_DIR)
         dl_task = asyncio.create_task(downloader.start_download())
         
         while not dl_task.done():
-            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 downloader.stop_download()
                 dl_task.cancel()
                 await safe_edit_text(status_msg, "🛑 <b>Torrent task cancelled!</b>", parse_mode=ParseMode.HTML)
@@ -4112,7 +2956,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
         await dl_task
         
         downloaded_items = []
-        for root, dirs, files in os.walk(DOWNLOAD_DIR):
+        for root, dirs, files in os.walk(cfg.DOWNLOAD_DIR):
             for file in files:
                 fpath = os.path.join(root, file)
                 if os.path.getmtime(fpath) >= start_time and not file.endswith(".torrent"):
@@ -4130,7 +2974,7 @@ async def process_torrent_download(torrent_src: str, status_msg: Message, user_m
     except Exception as e:
         await safe_edit_text(status_msg, f"❌ <b>Torrent Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
-        ACTIVE_TASKS.pop(task_id, None)
+        state.ACTIVE_TASKS.pop(task_id, None)
         gc.collect()
 
 async def process_single_local_file_upload(
@@ -4151,8 +2995,8 @@ async def process_single_local_file_upload(
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
     filename = clean_and_rename_filename(filename, user_id=user_id)
-    if task_id in ACTIVE_TASKS:
-        ACTIVE_TASKS[task_id]["filename"] = filename
+    if task_id in state.ACTIVE_TASKS:
+        state.ACTIVE_TASKS[task_id]["filename"] = filename
     icon, category_desc, is_video_type = get_god_category(filename)
     force_video = False if settings["upload_mode"] == "doc" else is_video_type
 
@@ -4168,9 +3012,9 @@ async def process_single_local_file_upload(
             if pkg and vcode is not None:
                 dup_record = db_check_apk_duplicate(pkg, vcode)
                 if dup_record:
-                    os.makedirs(PENDING_DIR, exist_ok=True)
+                    os.makedirs(cfg.PENDING_DIR, exist_ok=True)
                     dest_pending_name = f"pending_{int(time.time()*1000)}_{os.path.basename(file_path)}"
-                    dest_pending_path = os.path.join(PENDING_DIR, dest_pending_name)
+                    dest_pending_path = os.path.join(cfg.PENDING_DIR, dest_pending_name)
                     shutil.move(file_path, dest_pending_path)
                     new_pending_id = db_add_pending_download(
                         user_id=user_id,
@@ -4219,7 +3063,7 @@ async def process_single_local_file_upload(
             last_update = [0]
             
             async def pyrogram_progress_prem(current, total):
-                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                     return
                 await progress_bar(
                     current, total, ("رفع Premium" if lang == "ar" else "Premium upload"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
@@ -4279,7 +3123,7 @@ async def process_single_local_file_upload(
             return
         else:
             # Splitting check
-            ok_split, needed_s, free_s, reserve_s = check_disk_space_for_split(DOWNLOAD_DIR, SPLIT_CHUNK_BYTES)
+            ok_split, needed_s, free_s, reserve_s = check_disk_space_for_split(cfg.DOWNLOAD_DIR, SPLIT_CHUNK_BYTES)
             if not ok_split:
                 logger.error(f"Disk check failed before split: needed={needed_s}, free={free_s}, reserve={reserve_s}")
                 needed_mb = f"{needed_s / (1024*1024):.1f} MB"
@@ -4300,13 +3144,13 @@ async def process_single_local_file_upload(
             ext = os.path.splitext(filename)[1]
             with open(file_path, "rb") as src_file:
                 while True:
-                    if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                    if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                         return
                     chunk_data = src_file.read(SPLIT_CHUNK_BYTES)
                     if not chunk_data:
                         break
                     part_filename = f"{os.path.splitext(filename)[0]}.part{part_number:03d}{ext}"
-                    part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
+                    part_filepath = os.path.join(cfg.DOWNLOAD_DIR, part_filename)
                     with open(part_filepath, "wb") as part_file:
                         part_file.write(chunk_data)
                     part_msg = await user_msg.reply_document(
@@ -4327,7 +3171,7 @@ async def process_single_local_file_upload(
                 apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
                 db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, deliv_part_ids, apk_pkg, apk_vc)
             await status_msg.delete()
-            task_ssl_unverified = ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
+            task_ssl_unverified = state.ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
             extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
             success_card = (
                 f"{tr(lang, 'success_title')}\n"
@@ -4401,7 +3245,7 @@ async def process_single_local_file_upload(
         apk_vc = precomputed_apk_info.get("version_code") if (is_apk_family and precomputed_apk_info) else None
         db_record_delivery(user_id, url_key, filename, actual_file_size, user_msg.chat.id, [sent_msg.id], apk_pkg, apk_vc)
     await status_msg.delete()
-    task_ssl_unverified = ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
+    task_ssl_unverified = state.ACTIVE_TASKS.get(task_id, {}).get("ssl_unverified", False)
     extra_ssl_line = f"\n{TLS_VERIFICATION_SKIPPED_NOTICE}" if task_ssl_unverified else ""
     
     success_card = (
@@ -4425,12 +3269,12 @@ async def process_single_local_file_upload(
 
 async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg: Message):
     zip_filename = f"bundle_{int(time.time())}.zip"
-    zip_filepath = os.path.join(DOWNLOAD_DIR, zip_filename)
+    zip_filepath = os.path.join(cfg.DOWNLOAD_DIR, zip_filename)
     downloaded_files = []
     bundle_uid = user_msg.from_user.id if user_msg.from_user else 0
     st = db_get_user_settings(bundle_uid)
     lang = st["lang"]
-    ok_disk, _, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, None)
+    ok_disk, _, free_d, reserve_d = check_disk_space(cfg.DOWNLOAD_DIR, None)
     if not ok_disk:
         logger.error(f"Zip bundle disk check failed: free={free_d}, reserve={reserve_d}")
         needed_mb = "غير محدد" if lang == "ar" else "Unknown"
@@ -4456,10 +3300,10 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                         fname = clean_and_rename_filename(raw_fn, user_id=bundle_uid)
                         base_fn, ext_fn = os.path.splitext(fname)
                         counter = 1
-                        temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                        temp_fpath = os.path.join(cfg.DOWNLOAD_DIR, fname)
                         while temp_fpath in downloaded_files or os.path.exists(temp_fpath):
                             fname = f"{base_fn}_{counter}{ext_fn}"
-                            temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                            temp_fpath = os.path.join(cfg.DOWNLOAD_DIR, fname)
                             counter += 1
                         with open(temp_fpath, "wb") as f:
                             async for chunk in resp.aiter_content(1024 * 1024):
@@ -4476,10 +3320,10 @@ async def process_zip_bundle(valid_requests: list, status_msg: Message, user_msg
                                 fname = clean_and_rename_filename(raw_fn, user_id=bundle_uid)
                                 base_fn, ext_fn = os.path.splitext(fname)
                                 counter = 1
-                                temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                                temp_fpath = os.path.join(cfg.DOWNLOAD_DIR, fname)
                                 while temp_fpath in downloaded_files or os.path.exists(temp_fpath):
                                     fname = f"{base_fn}_{counter}{ext_fn}"
-                                    temp_fpath = os.path.join(DOWNLOAD_DIR, fname)
+                                    temp_fpath = os.path.join(cfg.DOWNLOAD_DIR, fname)
                                     counter += 1
                                 with open(temp_fpath, "wb") as f:
                                     async for chunk in resp.content.iter_chunked(1024 * 1024):
@@ -4589,7 +3433,7 @@ async def download_multi_stream_turbo(
         return False
 
     async def fetch_block(b_id: int, start_byte: int, end_byte: int, session: aiohttp.ClientSession):
-        if b_id in completed_blocks or ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+        if b_id in completed_blocks or state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             return False
         
         req_headers = {**headers, "Range": f"bytes={start_byte}-{end_byte}"}
@@ -4629,7 +3473,7 @@ async def download_multi_stream_turbo(
 
     async def worker_loop(worker_id: int, session: aiohttp.ClientSession):
         while len(completed_blocks) < total_blocks_count:
-            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 return False
 
             b_id = -1
@@ -4672,7 +3516,7 @@ async def download_multi_stream_turbo(
             workers = [asyncio.create_task(worker_loop(i, session)) for i in range(concurrency)]
             
             while len(completed_blocks) < total_blocks_count:
-                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                     for w in workers:
                         w.cancel()
                     return False
@@ -4864,13 +3708,13 @@ async def download_video_or_m3u8(
     ]
 
     for current_ref in candidate_referers:
-        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+        if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             return False, None, None
 
         status_tracker = {"downloaded": 0, "total": 0}
 
         def ytdl_progress_hook(d):
-            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 raise Exception("Download cancelled by user")
             if d.get("status") == "downloading":
                 downloaded = d.get("downloaded_bytes") or 0
@@ -5072,8 +3916,6 @@ async def resilient_send_media(client, chat_id, file_path, caption, is_video, pr
                 raise e
             await asyncio.sleep(2.0)
 
-TLS_VERIFICATION_SKIPPED_NOTICE = "🔓 تم تجاوز التحقق من الشهادة لهذا المضيف (سلسلة شهادة ناقصة) / TLS verification skipped for this host (broken certificate chain)"
-
 def is_cert_verification_error(exc: BaseException | None, seen: set | None = None) -> bool:
     """
     Returns True if exc is specifically a certificate verification failure
@@ -5149,7 +3991,7 @@ async def process_download_and_upload(
     thumb_path = None
     start_time = time.time()
     task_id = f"task_{int(time.time() * 1000)}"
-    ACTIVE_TASKS[task_id] = {"cancelled": False, "ssl_unverified": False}
+    state.ACTIVE_TASKS[task_id] = {"cancelled": False, "ssl_unverified": False}
     user_id = forced_user_id if forced_user_id is not None else (user_msg.from_user.id if (user_msg.from_user and not getattr(user_msg.from_user, "is_bot", False)) else (user_msg.chat.id if user_msg.chat else 0))
     settings = db_get_user_settings(user_id)
     lang = settings["lang"]
@@ -5193,7 +4035,7 @@ async def process_download_and_upload(
         download_success = False
         ssl_unverified_used = False
 
-        ok_init, _, free_init, reserve_init = check_disk_space(DOWNLOAD_DIR, None)
+        ok_init, _, free_init, reserve_init = check_disk_space(cfg.DOWNLOAD_DIR, None)
         if not ok_init:
             logger.error(f"Initial disk check failed: free={free_init}, reserve={reserve_init}")
             needed_mb = "غير محدد" if lang == "ar" else "Unknown"
@@ -5216,7 +4058,7 @@ async def process_download_and_upload(
             )
             v_ok, v_path, v_name = await download_video_or_m3u8(
                 video_url=target_stream_url,
-                output_dir=DOWNLOAD_DIR,
+                output_dir=cfg.DOWNLOAD_DIR,
                 custom_name=custom_name,
                 referer_header=referer_header,
                 status_msg=status_msg,
@@ -5229,8 +4071,8 @@ async def process_download_and_upload(
             if v_ok and v_path and os.path.exists(v_path):
                 file_path = v_path
                 filename = clean_and_rename_filename(v_name, user_id=user_id)
-                if task_id in ACTIVE_TASKS:
-                    ACTIVE_TASKS[task_id]["filename"] = filename
+                if task_id in state.ACTIVE_TASKS:
+                    state.ACTIVE_TASKS[task_id]["filename"] = filename
                 icon, category_desc, is_video_type = get_god_category(filename)
                 is_video_type = True
                 download_success = True
@@ -5267,10 +4109,10 @@ async def process_download_and_upload(
                             _, ext = os.path.splitext(extracted_filename)
                             raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
                             filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
-                            if task_id in ACTIVE_TASKS:
-                                ACTIVE_TASKS[task_id]["filename"] = filename
+                            if task_id in state.ACTIVE_TASKS:
+                                state.ACTIVE_TASKS[task_id]["filename"] = filename
                             icon, category_desc, is_video_type = get_god_category(filename)
-                            file_path = os.path.join(DOWNLOAD_DIR, filename)
+                            file_path = os.path.join(cfg.DOWNLOAD_DIR, filename)
 
                             logger.info(f"⚡ Launching Multi-Stream Turbo Downloader ({user_threads}x) for throttled link: {direct_url} (Size: {humanbytes(total_size_probe)})...")
                             info_card = (
@@ -5303,8 +4145,8 @@ async def process_download_and_upload(
                         f"Retrying once with TLS verification disabled."
                     )
                     ssl_unverified_used = True
-                    if task_id in ACTIVE_TASKS:
-                        ACTIVE_TASKS[task_id]["ssl_unverified"] = True
+                    if task_id in state.ACTIVE_TASKS:
+                        state.ACTIVE_TASKS[task_id]["ssl_unverified"] = True
                     try:
                         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as init_session:
                             async with init_session.get(direct_url, headers=headers, allow_redirects=True, ssl=False) as head_resp:
@@ -5321,10 +4163,10 @@ async def process_download_and_upload(
                                     _, ext = os.path.splitext(extracted_filename)
                                     raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
                                     filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
-                                    if task_id in ACTIVE_TASKS:
-                                        ACTIVE_TASKS[task_id]["filename"] = filename
+                                    if task_id in state.ACTIVE_TASKS:
+                                        state.ACTIVE_TASKS[task_id]["filename"] = filename
                                     icon, category_desc, is_video_type = get_god_category(filename)
-                                    file_path = os.path.join(DOWNLOAD_DIR, filename)
+                                    file_path = os.path.join(cfg.DOWNLOAD_DIR, filename)
 
                                     info_card = (
                                         f"⬇️ <b>{'تنزيل' if lang == 'ar' else 'Downloading'} ({user_threads}x)</b>\n"
@@ -5361,12 +4203,12 @@ async def process_download_and_upload(
 
         if not download_success and CURL_CFFI_AVAILABLE:
             for target_prof, target_ref in profiles:
-                if download_success or ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                if download_success or state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                     break
 
                 max_stalled_retries = 5
                 for retry_idx in range(max_stalled_retries):
-                    if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                    if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                         break
 
                     headers = {**STEALTH_HEADERS, "Referer": target_ref}
@@ -5393,10 +4235,10 @@ async def process_download_and_upload(
                             
                             raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
                             filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
-                            if task_id in ACTIVE_TASKS:
-                                ACTIVE_TASKS[task_id]["filename"] = filename
+                            if task_id in state.ACTIVE_TASKS:
+                                state.ACTIVE_TASKS[task_id]["filename"] = filename
                             icon, category_desc, is_video_type = get_god_category(filename)
-                            file_path = os.path.join(DOWNLOAD_DIR, filename)
+                            file_path = os.path.join(cfg.DOWNLOAD_DIR, filename)
 
                             size_disp = humanbytes(total_size) if total_size else "..."
                             info_card = (
@@ -5412,7 +4254,7 @@ async def process_download_and_upload(
                             stalled = False
 
                             if status_tracker["downloaded"] == 0:
-                                ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
+                                ok_disk, needed_d, free_d, reserve_d = check_disk_space(cfg.DOWNLOAD_DIR, total_size if total_size > 0 else None)
                                 if not ok_disk:
                                     logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
                                     needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
@@ -5427,7 +4269,7 @@ async def process_download_and_upload(
                                     f.seek(status_tracker["downloaded"])
                                 
                                 async for chunk in resp.aiter_content(512 * 1024):
-                                    if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                                    if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                                         await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                         return
                                     if chunk:
@@ -5464,8 +4306,8 @@ async def process_download_and_upload(
                                 f"Retrying once with TLS verification disabled."
                             )
                             ssl_unverified_used = True
-                            if task_id in ACTIVE_TASKS:
-                                ACTIVE_TASKS[task_id]["ssl_unverified"] = True
+                            if task_id in state.ACTIVE_TASKS:
+                                state.ACTIVE_TASKS[task_id]["ssl_unverified"] = True
                             if file_path and os.path.exists(file_path):
                                 try:
                                     os.remove(file_path)
@@ -5485,10 +4327,10 @@ async def process_download_and_upload(
                                         _, ext = os.path.splitext(extracted_filename)
                                         raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
                                         filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
-                                        if task_id in ACTIVE_TASKS:
-                                            ACTIVE_TASKS[task_id]["filename"] = filename
+                                        if task_id in state.ACTIVE_TASKS:
+                                            state.ACTIVE_TASKS[task_id]["filename"] = filename
                                         icon, category_desc, is_video_type = get_god_category(filename)
-                                        file_path = os.path.join(DOWNLOAD_DIR, filename)
+                                        file_path = os.path.join(cfg.DOWNLOAD_DIR, filename)
 
                                         size_disp = humanbytes(total_size) if total_size else "..."
                                         info_card = (
@@ -5504,7 +4346,7 @@ async def process_download_and_upload(
                                         stalled = False
 
                                         if status_tracker["downloaded"] == 0:
-                                            ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
+                                            ok_disk, needed_d, free_d, reserve_d = check_disk_space(cfg.DOWNLOAD_DIR, total_size if total_size > 0 else None)
                                             if not ok_disk:
                                                 logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
                                                 needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
@@ -5519,7 +4361,7 @@ async def process_download_and_upload(
                                                 f.seek(status_tracker["downloaded"])
                                             
                                             async for chunk in resp.aiter_content(512 * 1024):
-                                                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                                                if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                                                     await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                                     return
                                                 if chunk:
@@ -5554,7 +4396,7 @@ async def process_download_and_upload(
                             logger.warning(f"Connection retry {retry_idx} error: {ex}")
                             await asyncio.sleep(1.0)
 
-        if not download_success and not ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+        if not download_success and not state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=60)
             headers = {**STEALTH_HEADERS, "Referer": referer_header}
             if custom_cookie:
@@ -5577,12 +4419,12 @@ async def process_download_and_upload(
                         _, ext = os.path.splitext(extracted_filename)
                         raw_target_name = f"{custom_name}{ext}" if custom_name and ext and not custom_name.lower().endswith(ext.lower()) else (custom_name or extracted_filename)
                         filename = clean_and_rename_filename(raw_target_name, user_id=user_id)
-                        if task_id in ACTIVE_TASKS:
-                            ACTIVE_TASKS[task_id]["filename"] = filename
+                        if task_id in state.ACTIVE_TASKS:
+                            state.ACTIVE_TASKS[task_id]["filename"] = filename
                         icon, category_desc, is_video_type = get_god_category(filename)
-                        file_path = os.path.join(DOWNLOAD_DIR, filename)
+                        file_path = os.path.join(cfg.DOWNLOAD_DIR, filename)
 
-                        ok_disk, needed_d, free_d, reserve_d = check_disk_space(DOWNLOAD_DIR, total_size if total_size > 0 else None)
+                        ok_disk, needed_d, free_d, reserve_d = check_disk_space(cfg.DOWNLOAD_DIR, total_size if total_size > 0 else None)
                         if not ok_disk:
                             logger.error(f"Disk check failed before write: needed={needed_d}, free={free_d}, reserve={reserve_d}")
                             needed_mb = f"{needed_d / (1024*1024):.1f} MB" if needed_d > 0 else ("غير محدد" if lang == "ar" else "Unknown")
@@ -5594,7 +4436,7 @@ async def process_download_and_upload(
 
                         with open(file_path, "wb") as f:
                             async for chunk in response.content.iter_chunked(512 * 1024):
-                                if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                                if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                                     await safe_edit_text(status_msg, "🛑 <b>Download cancelled!</b>", parse_mode=ParseMode.HTML)
                                     return
 
@@ -5624,8 +4466,8 @@ async def process_download_and_upload(
                         f"Retrying once with TLS verification disabled."
                     )
                     ssl_unverified_used = True
-                    if task_id in ACTIVE_TASKS:
-                        ACTIVE_TASKS[task_id]["ssl_unverified"] = True
+                    if task_id in state.ACTIVE_TASKS:
+                        state.ACTIVE_TASKS[task_id]["ssl_unverified"] = True
                     if file_path and os.path.exists(file_path):
                         try:
                             os.remove(file_path)
@@ -5639,7 +4481,7 @@ async def process_download_and_upload(
         actual_file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
 
         if not file_path or not os.path.exists(file_path) or actual_file_size == 0:
-            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 return
             await safe_edit_text(
                 status_msg,
@@ -5716,9 +4558,9 @@ async def process_download_and_upload(
                 if pkg and vcode is not None:
                     dup_record = db_check_apk_duplicate(pkg, vcode)
                     if dup_record:
-                        os.makedirs(PENDING_DIR, exist_ok=True)
+                        os.makedirs(cfg.PENDING_DIR, exist_ok=True)
                         dest_pending_name = f"pending_{int(time.time()*1000)}_{os.path.basename(file_path)}"
-                        dest_pending_path = os.path.join(PENDING_DIR, dest_pending_name)
+                        dest_pending_path = os.path.join(cfg.PENDING_DIR, dest_pending_name)
                         shutil.move(file_path, dest_pending_path)
                         pending_fpath = dest_pending_path
                         file_path = None
@@ -5769,7 +4611,7 @@ async def process_download_and_upload(
                 last_update = [0]
                 
                 async def pyrogram_progress_prem(current, total):
-                    if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                    if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                         return
                     await progress_bar(
                         current, total, ("رفع Premium" if lang == "ar" else "Premium upload"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
@@ -5818,7 +4660,7 @@ async def process_download_and_upload(
                 return
             else:
                 # إذا لم يكن البريميوم مفعلاً -> تقسيم الملف لتفادي الانهيار
-                ok_split, needed_s, free_s, reserve_s = check_disk_space_for_split(DOWNLOAD_DIR, SPLIT_CHUNK_BYTES)
+                ok_split, needed_s, free_s, reserve_s = check_disk_space_for_split(cfg.DOWNLOAD_DIR, SPLIT_CHUNK_BYTES)
                 if not ok_split:
                     logger.error(f"Disk check failed before split: needed={needed_s}, free={free_s}, reserve={reserve_s}")
                     needed_mb = f"{needed_s / (1024*1024):.1f} MB"
@@ -5840,13 +4682,13 @@ async def process_download_and_upload(
                 ext = os.path.splitext(filename)[1]
                 with open(file_path, "rb") as src_file:
                     while True:
-                        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+                        if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                             return
                         chunk_data = src_file.read(SPLIT_CHUNK_BYTES)
                         if not chunk_data:
                             break
                         part_filename = f"{os.path.splitext(filename)[0]}.part{part_number:03d}{ext}"
-                        part_filepath = os.path.join(DOWNLOAD_DIR, part_filename)
+                        part_filepath = os.path.join(cfg.DOWNLOAD_DIR, part_filename)
                         with open(part_filepath, "wb") as part_file:
                             part_file.write(chunk_data)
 
@@ -5890,7 +4732,7 @@ async def process_download_and_upload(
         last_update = [0]
         
         async def pyrogram_progress(current, total):
-            if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+            if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
                 return
             await progress_bar(
                 current, total, tr(lang, "uploading"), status_msg, up_start_time, last_update, icon="📤", task_id=task_id, lang=lang
@@ -5898,7 +4740,7 @@ async def process_download_and_upload(
 
         caption, brand_markup = build_file_caption(filename, actual_file_size, category_desc, icon, user_id, custom_caption)
 
-        if ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
+        if state.ACTIVE_TASKS.get(task_id, {}).get("cancelled"):
             await safe_edit_text(status_msg, "🛑 <b>Upload cancelled!</b>", parse_mode=ParseMode.HTML)
             return
 
@@ -5973,7 +4815,7 @@ async def process_download_and_upload(
     except Exception as e:
         await safe_edit_text(status_msg, f"❌ <b>Unexpected Error:</b>\n<code>{str(e)}</code>", parse_mode=ParseMode.HTML)
     finally:
-        ACTIVE_TASKS.pop(task_id, None)
+        state.ACTIVE_TASKS.pop(task_id, None)
         if thumb_path and os.path.exists(thumb_path):
             try:
                 os.remove(thumb_path)
@@ -5993,11 +4835,11 @@ def cleanup_temp_dir(max_age_hours: float | None = 6.0):
     Never touches PENDING_DIR.
     """
     try:
-        if os.path.exists(DOWNLOAD_DIR):
+        if os.path.exists(cfg.DOWNLOAD_DIR):
             now = time.time()
             cutoff = (now - max_age_hours * 3600) if max_age_hours is not None else None
-            for f in os.listdir(DOWNLOAD_DIR):
-                fp = os.path.join(DOWNLOAD_DIR, f)
+            for f in os.listdir(cfg.DOWNLOAD_DIR):
+                fp = os.path.join(cfg.DOWNLOAD_DIR, f)
                 if os.path.isfile(fp):
                     try:
                         if cutoff is None or os.path.getmtime(fp) < cutoff:

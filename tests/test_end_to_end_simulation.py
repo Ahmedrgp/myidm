@@ -12,6 +12,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import bot
+import myidm.config
 
 async def start_local_test_server():
     app = web.Application()
@@ -84,7 +85,7 @@ async def run_end_to_end_test():
             print("2. Real HTTP Download of APK (golden_v1.apk - Fresh)")
             print("==========================================")
             # Clear previous inspection for android.appsecurity.cts.tinyapp to simulate fresh download
-            conn = sqlite3.connect(bot.DB_FILE)
+            conn = sqlite3.connect(myidm.config.DB_FILE)
             conn.cursor().execute("DELETE FROM apk_inspections WHERE package = 'android.appsecurity.cts.tinyapp'")
             conn.commit()
             conn.close()
@@ -137,7 +138,7 @@ async def run_end_to_end_test():
             print("\n==========================================")
             print("4. Duplicate Approval Flow (run_approved_pending_upload)")
             print("==========================================")
-            conn = sqlite3.connect(bot.DB_FILE)
+            conn = sqlite3.connect(myidm.config.DB_FILE)
             pending_row = conn.cursor().execute("SELECT id FROM pending_downloads WHERE status = 'pending' ORDER BY id DESC LIMIT 1").fetchone()
             conn.close()
             assert pending_row is not None, "Pending download record not found in database!"

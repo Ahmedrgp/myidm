@@ -15,6 +15,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import bot
+import myidm.config
 
 class TestFwdCache(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -23,17 +24,17 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             shutil.rmtree(self.test_dir, ignore_errors=True)
         os.makedirs(self.test_dir, exist_ok=True)
 
-        self.orig_data_dir = bot.DATA_DIR
-        self.orig_db_file = bot.DB_FILE
-        self.orig_download_dir = bot.DOWNLOAD_DIR
-        self.orig_pending_dir = bot.PENDING_DIR
+        self.orig_data_dir = myidm.config.DATA_DIR
+        self.orig_db_file = myidm.config.DB_FILE
+        self.orig_download_dir = myidm.config.DOWNLOAD_DIR
+        self.orig_pending_dir = myidm.config.PENDING_DIR
 
-        bot.DATA_DIR = self.test_dir
-        bot.DB_FILE = os.path.join(self.test_dir, "bot_database.db")
-        bot.DOWNLOAD_DIR = os.path.join(self.test_dir, "downloads")
-        bot.PENDING_DIR = os.path.join(self.test_dir, "pending_downloads")
-        os.makedirs(bot.DOWNLOAD_DIR, exist_ok=True)
-        os.makedirs(bot.PENDING_DIR, exist_ok=True)
+        myidm.config.DATA_DIR = self.test_dir
+        myidm.config.DB_FILE = os.path.join(self.test_dir, "bot_database.db")
+        myidm.config.DOWNLOAD_DIR = os.path.join(self.test_dir, "downloads")
+        myidm.config.PENDING_DIR = os.path.join(self.test_dir, "pending_downloads")
+        os.makedirs(myidm.config.DOWNLOAD_DIR, exist_ok=True)
+        os.makedirs(myidm.config.PENDING_DIR, exist_ok=True)
 
         bot.init_db()
 
@@ -41,10 +42,10 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         self.chat_id = 1594244556
 
     async def asyncTearDown(self):
-        bot.DATA_DIR = self.orig_data_dir
-        bot.DB_FILE = self.orig_db_file
-        bot.DOWNLOAD_DIR = self.orig_download_dir
-        bot.PENDING_DIR = self.orig_pending_dir
+        myidm.config.DATA_DIR = self.orig_data_dir
+        myidm.config.DB_FILE = self.orig_db_file
+        myidm.config.DOWNLOAD_DIR = self.orig_download_dir
+        myidm.config.PENDING_DIR = self.orig_pending_dir
 
         if os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir, ignore_errors=True)
@@ -617,8 +618,8 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
         conn.commit()
         conn.close()
 
-        # Switch bot.DB_FILE to legacy DB
-        bot.DB_FILE = legacy_db_path
+        # Switch myidm.config.DB_FILE to legacy DB
+        myidm.config.DB_FILE = legacy_db_path
         try:
             # 1. First startup / migration
             bot.init_db()
@@ -677,7 +678,7 @@ class TestFwdCache(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(migrated_insp["min_sdk"], 26)
             self.assertEqual(migrated_insp["target_sdk"], 34)
         finally:
-            bot.DB_FILE = os.path.join(self.test_dir, "bot_database.db")
+            myidm.config.DB_FILE = os.path.join(self.test_dir, "bot_database.db")
 
 if __name__ == "__main__":
     unittest.main()

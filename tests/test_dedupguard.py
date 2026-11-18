@@ -14,6 +14,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import bot
+import myidm.config
 
 class TestDedupGuard(unittest.TestCase):
     def setUp(self):
@@ -23,21 +24,21 @@ class TestDedupGuard(unittest.TestCase):
             shutil.rmtree(self.test_data_dir, ignore_errors=True)
         os.makedirs(self.test_data_dir, exist_ok=True)
         
-        self.orig_data_dir = bot.DATA_DIR
-        self.orig_db_file = bot.DB_FILE
-        self.orig_pending_dir = bot.PENDING_DIR
+        self.orig_data_dir = myidm.config.DATA_DIR
+        self.orig_db_file = myidm.config.DB_FILE
+        self.orig_pending_dir = myidm.config.PENDING_DIR
         
-        bot.DATA_DIR = self.test_data_dir
-        bot.DB_FILE = os.path.join(self.test_data_dir, "bot_database.db")
-        bot.PENDING_DIR = os.path.join(self.test_data_dir, "pending_downloads")
-        os.makedirs(bot.PENDING_DIR, exist_ok=True)
+        myidm.config.DATA_DIR = self.test_data_dir
+        myidm.config.DB_FILE = os.path.join(self.test_data_dir, "bot_database.db")
+        myidm.config.PENDING_DIR = os.path.join(self.test_data_dir, "pending_downloads")
+        os.makedirs(myidm.config.PENDING_DIR, exist_ok=True)
         
         bot.init_db()
 
     def tearDown(self):
-        bot.DATA_DIR = self.orig_data_dir
-        bot.DB_FILE = self.orig_db_file
-        bot.PENDING_DIR = self.orig_pending_dir
+        myidm.config.DATA_DIR = self.orig_data_dir
+        myidm.config.DB_FILE = self.orig_db_file
+        myidm.config.PENDING_DIR = self.orig_pending_dir
         if os.path.exists(self.test_data_dir):
             shutil.rmtree(self.test_data_dir, ignore_errors=True)
 
