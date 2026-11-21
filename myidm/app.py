@@ -3,6 +3,7 @@ import logging
 import sys
 
 from pyrogram import Client, idle
+from pyrogram.utils import loops
 from pyrogram.types import BotCommand
 
 import myidm  # noqa: F401
@@ -125,6 +126,6 @@ async def main():
 
 def run():
     try:
-        bot.run(main())
+        loops.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped.")
